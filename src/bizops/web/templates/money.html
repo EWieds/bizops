@@ -6,8 +6,8 @@
 {% endcall %}
 {% call card("Org wallets") %}
 <p class="text-xs text-slate-500 mb-2">Wallets are internal allocations. Agents can only pay owner-allowlisted payees from them. Real cash stays in your accounts; the payments provider is <b>sandbox</b> unless you configure a real one.</p>
-<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Org</th><th>Wallet</th><th>Paid today</th><th>Spend (month)</th><th>Model cost</th><th>Verified revenue</th><th>Deposit</th></tr></thead><tbody>
-{% for o in orgs %}<tr class="border-t"><td>{{ o.name }}</td><td><b>{{ o.wallet|usd }}</b></td><td>{{ o.paid_today|usd }}</td><td>{{ o.spent|usd }} / {{ o.monthly_cap_micros|usd }}</td><td>{{ o.model_cost|usd }}</td><td>{{ o.revenue|usd }}</td>
+<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Org</th><th>Wallet</th><th>Paid today</th><th>Spend (month)</th><th>Model cost</th><th>Revenue (all time)</th><th>Cleared</th><th>Deposit</th></tr></thead><tbody>
+{% for o in orgs %}<tr class="border-t"><td>{{ o.name }}</td><td><b>{{ o.wallet|usd }}</b></td><td>{{ o.paid_today|usd }}</td><td>{{ o.spent|usd }} / {{ o.monthly_cap_micros|usd }}</td><td>{{ o.model_cost|usd }}</td><td>{{ o.revenue|usd }}{% if o.sandbox_revenue %} <span class="text-amber-700 text-xs">+ test {{ o.sandbox_revenue|usd }}</span>{% endif %}</td><td>{{ o.cleared|usd }}</td>
 <td><form method="post" action="/money/deposit" class="flex gap-1"><input type="hidden" name="org_id" value="{{ o.id }}"><input name="amount" size="5" class="border rounded p-1 text-xs" placeholder="$"><button class="text-xs px-2 rounded bg-slate-800 text-white">add</button></form></td></tr>{% endfor %}
 </tbody></table>
 {% endcall %}

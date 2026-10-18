@@ -1,0 +1,22 @@
+# Sells AI phone receptionists (voice agents) to local service businesses.
+monthly_cap_usd: 50
+settings: {max_agents: 12, max_depth: 4, max_reports: 6}
+playbook: |
+  Customers: local service businesses that lose money on missed calls (dental, HVAC, plumbing, salons, law).
+  Product: an AI receptionist that answers inbound calls, answers FAQs, and takes booking requests.
+  Delivery decision: white-label a voice platform (Vapi) first; build our own stack only if margins demand it.
+  Every prospect gets a live web demo built for their business (create_voice_agent, demo link) in the email.
+  Pricing hypothesis: setup fee + monthly subscription; validate with real replies before changing it.
+  Inbound calls only. Never make AI calls or texts to consumers. Never claim the agent is a human.
+agents:
+  - {key: ceo, role: ceo, name: CEO, budget_usd: 10, min_interval_s: 15}
+  - {key: cfo, role: cfo, name: CFO, parent: ceo, budget_usd: 4}
+  - {key: researcher, role: researcher, name: Market Researcher, parent: ceo, budget_usd: 7,
+     focus: "Voice AI market: competitors and their pricing, white-label platforms and their costs, which local niches miss the most calls."}
+  - {key: engineer, role: product_engineer, name: Voice Product Engineer, parent: ceo, budget_usd: 9,
+     focus: "Build per-prospect demo receptionists and the sales site; configure and test customer agents."}
+  - {key: sales, role: sales, name: Sales Lead, parent: ceo, budget_usd: 9,
+     focus: "Sell to local service businesses by email, each with a personalized live demo link."}
+  - {key: cs, role: customer_success, name: Customer Success, parent: ceo, budget_usd: 6,
+     focus: "Onboard paying businesses: collect hours, services, FAQs and booking rules; go live within 48 hours."}
+  - {key: writer, role: writer, name: Copywriter, parent: sales, budget_usd: 3}

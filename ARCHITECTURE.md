@@ -57,6 +57,34 @@ Auto-detected (core.detect_backend): API key or `ant` profile -> official SDK; e
 the machine via the `claude` CLI (llm/claude_cli.py: one headless call per turn, built-in tools off,
 JSON schema for proposed tool calls, exact cost from the CLI); else the scripted dry-run model.
 
+## The money loop (business.py, tools/sales.py, connectors/)
+research -> decide (memo) -> build (publish_page, create_voice_agent, ...) -> create_offer (Stripe product +
+price + payment link, labeled with the business) -> find_businesses / extract_contacts / add_lead ->
+send_email (compliance in code) -> replies arrive (IMAP poll) -> send_payment_link (tracked per lead) ->
+Stripe reports the payment (event poll, no public webhook needed) -> revenue in the ledger (connector
+source, per business, 30-day holdback before it counts as cleared) -> customer created -> customer
+success onboards and delivers -> goals with a metric_key are measured from this data automatically.
+
+Compliance enforced in code: B2B only with a public source, sender identity + postal address +
+one-click unsubscribe on every email, suppression list, unsubscribe replies honored automatically,
+per-business daily cap, follow-up gap, max cold touches, spammy wording blocked, inbound calls only.
+Outside dry runs, a real lead can't be emailed until a real mailbox is connected, and offers need
+Stripe: each is one queue item for the owner (deduplicated), and agents keep working meanwhile.
+
+Connectors: connectors/billing.py (Stripe or test checkout), connectors/email.py (SMTP/IMAP or test
+outbox), connectors/voice.py (Vapi or web-demo only). simworld.py is the simulated market used only by
+dry runs and tests; its money is marked sandbox and never counts as revenue.
+
+## Public web (web/public.py, web/auth.py)
+One server: the dashboard (owner login required; without a password it only answers this machine) and
+public customer-facing routes: /s/<business>/<page> websites, /demo/<agent> live voice-agent demos,
+/pay/<offer> checkout, /u/<token> unsubscribe, /f/<file>/<sig> shared deliverables. Deploy:
+Dockerfile + fly.toml + scripts/deploy-fly.sh, or `bizops serve --tunnel` from a computer.
+
+## Ventures
+The platform's venture analyst proposes businesses; the platform CEO launches them with create_business
+inside the venture budget (max new per month, max on trial, starting cap). New businesses start on trial.
+
 ## The gateway (`gateway.py`): the only path to act
 For every tool call:
 1. **Policy** (`policy.check_action`): kill switches, grant, hard stops, standing authorization, rate limit.

@@ -4,7 +4,7 @@ Kinds and who may write them:
   model_cost, spend       system (gateway) only
   payment, payment_reversal   the pay tool via the payment provider
   deposit                 human only (owner funds an org wallet)
-  revenue                 connector or human only; agents can never write it
+  revenue                 connector or human only (or the sandbox, kept separate); agents can never write it
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ ALLOWED_SOURCES = {
     "payment": {"provider"},
     "payment_reversal": {"provider", "human"},
     "deposit": {"human"},
-    "revenue": {"connector", "human"},
+    "revenue": {"connector", "human", "sandbox"},
 }
 
 
@@ -88,3 +88,14 @@ def payments_since(target: Database | sqlite3.Connection, org_id: str, since: st
            "WHEN kind = 'payment_reversal' THEN -amount_micros ELSE 0 END), 0) "
            "FROM ledger_entries WHERE org_id = ? AND ts >= ?")
     return _q(target, sql, (org_id, since))
+
+
+def revenue(target: Database | sqlite3.Connection, *, since: str, org_id: str | None = None,
+            sandbox: bool = False) -> int:
+    """Revenue since a timestamp. Real revenue (connector/human) and sandbox revenue never mix."""
+    where = "kind = 'revenue' AND ts >= ? AND source " + ("= 'sandbox'" if sandbox else "IN ('connector','human')")
+    params: list = [since]
+    if org_id:
+        where += " AND org_id = ?"
+        params.append(org_id)
+    return _q(target, f"SELECT COALESCE(SUM(amount_micros), 0) FROM ledger_entries WHERE {where}", tuple(params))

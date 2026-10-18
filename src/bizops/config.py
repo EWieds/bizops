@@ -104,3 +104,31 @@ def deep_merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def write_env(path: Path, updates: dict[str, str]) -> None:
+    """Set KEY=VALUE pairs in a .env file (created with owner-only permissions) and in os.environ."""
+    lines = path.read_text().splitlines() if path.is_file() else []
+    seen = set()
+    out = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+        if key in updates:
+            seen.add(key)
+            if updates[key] != "":
+                out.append(f"{key}={updates[key]}")
+            continue
+        out.append(line)
+    for k, v in updates.items():
+        if k not in seen and v != "":
+            out.append(f"{k}={v}")
+    path.write_text("\n".join(out) + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    for k, v in updates.items():
+        if v == "":
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v

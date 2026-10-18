@@ -59,14 +59,23 @@ class Approver:
     def cfg(self) -> dict[str, Any]:
         return self.settings.policy.get("approver", {})
 
+    def _action_cfg(self, tool_name: str) -> dict[str, Any] | None:
+        actions = self.cfg.get("actions") or {}
+        if tool_name in actions:
+            return actions[tool_name] or {}
+        if tool_name in (self.cfg.get("screen") or []):
+            return {}
+        return None
+
     def screens(self, tool_name: str) -> bool:
-        return tool_name in (self.cfg.get("screen") or [])
+        return self._action_cfg(tool_name) is not None
 
     async def review(self, *, agent: dict, tool_name: str, args: dict, reason: str,
                      context: dict[str, Any]) -> tuple[ApproverVerdict, list[ApproverVerdict]]:
         min_conf = float(self.cfg.get("min_confidence", 0.7))
+        acfg = self._action_cfg(tool_name) or {}
         trail: list[ApproverVerdict] = []
-        for step in self.cfg.get("chain", ["rules", "llm"]):
+        for step in acfg.get("chain") or self.cfg.get("chain", ["rules", "llm"]):
             fn = {"rules": self._rules, "jev": self._jev, "llm": self._llm}.get(step)
             if fn is None:
                 continue
@@ -79,12 +88,18 @@ class Approver:
                 return v, trail
             if v.verdict == "block" and step == "rules":
                 return v, trail
-        fallback = self.cfg.get("on_unavailable", "block")
+        fallback = acfg.get("on_unavailable") or self.cfg.get("on_unavailable", "block")
         return ApproverVerdict("allow" if fallback == "allow" else "block", 0.0,
                                "no approver gave a confident verdict", "fallback"), trail
 
     async def _rules(self, *, agent: dict, tool_name: str, args: dict, reason: str,
                      context: dict[str, Any]) -> ApproverVerdict:
+        if tool_name in ("send_email", "send_payment_link"):
+            text = f"{args.get('subject', '')} {args.get('body', '')} {args.get('message', '')}".lower()
+            for bad in ("guarantee", "100% free", "act now", "risk-free", "you have been selected", "no obligation",
+                        "i'm a real person", "i am a human"):
+                if bad in text:
+                    return ApproverVerdict("block", 1.0, f"spammy or deceptive wording: '{bad}'", "rules")
         if tool_name == "pay":
             if not str(args.get("memo", "")).strip() or not reason.strip():
                 return ApproverVerdict("block", 1.0, "payments need a memo and a stated reason", "rules")

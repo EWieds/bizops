@@ -32,6 +32,8 @@ hard_stops:
   raise_cap: "Raising a cap past the owner's ceiling"
   external_transfer: "Moving money outside the platform (owner distributions, unlisted payees)"
   new_payee: "Adding a payee to the allowlist"
+  connect_email: "Connecting the email account agents send from (one time)"
+  connect_billing: "Connecting the umbrella Stripe account (one time)"
 
 # Per-agent per-hour rate limits by tool name. '*' is the default for unlisted tools.
 rate_limits:
@@ -43,10 +45,14 @@ rate_limits:
 # Pre-screening: actions in this list go through the approver chain before running.
 # The chain allows or blocks on its own. It never waits for a human.
 approver:
-  screen: [pay]
-  chain: [rules, jev, llm]    # first decisive verdict wins; 'rules' always runs first
+  chain: [rules, jev, llm]    # default chain; first decisive verdict wins; 'rules' always runs first
   min_confidence: 0.7         # below this the action is blocked (logged, overridable)
-  on_unavailable: block       # if no approver can give a verdict for a screened action
+  on_unavailable: block       # if no approver can give a confident verdict
+  actions:                    # which actions are screened, and how
+    pay: {chain: [rules, jev, llm], on_unavailable: block}
+    create_offer: {chain: [rules, jev, llm], on_unavailable: block}
+    send_payment_link: {chain: [rules, jev], on_unavailable: allow}
+    send_email: {chain: [rules, jev], on_unavailable: allow}
 
 money:
   per_payment_max_usd: 50          # absolute max for any single payment
@@ -73,3 +79,25 @@ heartbeats:
   digest_hour_utc: 13           # the platform CEO sends the owner a daily digest after this hour
   daily_review_hours: 24        # managers get at least one review run per this many hours
   audit_every_s: 3600           # code-level audit checks (loops, cost anomalies, unsupported claims)
+  connector_poll_s: 60          # check the mailbox and the payment provider this often
+
+# Selling: outreach, offers and payments. Enforced in code.
+sales:
+  email_daily_max_per_org: 40       # cold + follow-up emails per business per day (protects sender reputation)
+  email_followup_gap_days: 3        # min days between cold emails to the same lead (replies are exempt)
+  email_max_cold_touches: 3         # stop after this many emails without a reply
+  price_min_usd: 1
+  price_max_usd: 2000               # offers above this need the owner (hard stop: raise_cap)
+  revenue_holdback_days: 30         # revenue counts as cleared (allocatable) after refunds/chargebacks window
+  b2b_only: true                    # outreach only to businesses, with a public source for the contact
+
+# Sandbox market (only used while email or billing is not connected to a real provider).
+sandbox:
+  reply_delay_s: 45               # how long simulated prospects take to answer
+
+# Venture budget: what the platform may launch on its own.
+venture:
+  max_new_orgs_per_month: 2
+  max_on_trial: 3
+  starting_cap_usd: 50
+  templates: [generic, voice-agent-sales, rank-and-rent, digital-products]

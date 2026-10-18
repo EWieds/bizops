@@ -40,9 +40,9 @@
 <div class="flex min-h-screen">
 <aside class="w-56 bg-slate-900 text-slate-300 flex-none hidden md:flex flex-col">
   <a href="/" class="px-5 py-4 text-white font-bold text-lg tracking-tight">bizops<span class="text-slate-500 font-normal text-xs ml-1">holding co.</span></a>
-  {% set links = [("/", "Overview", ""), ("/goals", "Goals", ""), ("/activity", "Activity", ""), ("/chat", "Chat", ""),
+  {% set links = [("/", "Overview", ""), ("/pipeline", "Sales & customers", ""), ("/goals", "Goals", ""), ("/activity", "Activity", ""), ("/chat", "Chat", ""),
                   ("/queue", "Needs you", open_queue), ("/audit", "Audit", open_findings), ("/money", "Money", ""),
-                  ("/system", "System", ""), ("/new", "+ New business", "")] %}
+                  ("/system", "System", ""), ("/connect", "Connect accounts", ""), ("/new", "+ New business", "")] %}
   <nav class="flex flex-col gap-0.5 px-2">
   {% for href, label, badge in links %}
     <a href="{{ href }}" class="px-3 py-2 rounded-md flex items-center justify-between {% if nav == href or (href != '/' and nav.startswith(href)) %}bg-slate-700 text-white{% else %}hover:bg-slate-800 hover:text-white{% endif %}">

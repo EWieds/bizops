@@ -136,6 +136,12 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         await core.aclose()
 
     app = FastAPI(title="bizops", lifespan=lifespan)
+    from .auth import ensure_secret, install_auth
+    from .connect import register_connect
+    from .public import PUBLIC_PREFIXES, register_public
+    ensure_secret(core.settings.home / ".env")
+    install_auth(app, PUBLIC_PREFIXES)
+    register_public(app, core)
     app.state.core = core
     app.state.scheduler = scheduler
     db, settings = core.db, core.settings
@@ -164,8 +170,8 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             o["agents"] = db.scalar("SELECT COUNT(*) AS n FROM agents WHERE org_id = ? AND status != 'retired'", (o["id"],))
             o["open_tasks"] = db.scalar("SELECT COUNT(*) AS n FROM tasks WHERE org_id = ? AND status IN ('open','in_progress')", (o["id"],))
             o["blocked"] = db.scalar("SELECT COUNT(*) AS n FROM tasks WHERE org_id = ? AND status = 'blocked'", (o["id"],))
-            o["revenue"] = db.scalar("SELECT COALESCE(SUM(amount_micros),0) AS s FROM ledger_entries WHERE org_id = ? "
-                                     "AND kind = 'revenue' AND ts >= ?", (o["id"], ms))
+            o["revenue"] = ledger.revenue(db, since=ms, org_id=o["id"])
+            o["sandbox_revenue"] = ledger.revenue(db, since=ms, org_id=o["id"], sandbox=True)
             o["flags"] = db.scalar("SELECT COUNT(*) AS n FROM policy_decisions WHERE org_id = ? AND verdict != 'allowed' "
                                    "AND ts >= ?", (o["id"], ms))
             o["ceo"] = org_ceo(db, o["id"])
@@ -177,7 +183,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
                   "monthly_cap": monthly, "daily_cap": daily, "ceiling": ceiling,
                   "running": len(scheduler.running),
                   "agents": db.scalar("SELECT COUNT(*) AS n FROM agents WHERE status != 'retired'"),
-                  "revenue": db.scalar("SELECT COALESCE(SUM(amount_micros),0) AS s FROM ledger_entries WHERE kind = 'revenue' AND ts >= ?", (ms,)),
+                  "revenue": ledger.revenue(db, since=ms), "sandbox_revenue": ledger.revenue(db, since=ms, sandbox=True),
                   "goals_active": gstat.get("active", 0) + gstat.get("at_risk", 0), "goals_risk": gstat.get("at_risk", 0),
                   "goals_done": gstat.get("achieved", 0),
                   "runs_today": db.scalar("SELECT COUNT(*) AS n FROM runs WHERE started_at >= ?", (day_start(),))}
@@ -523,8 +529,10 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             o["paid_today"] = ledger.payments_since(db, o["id"], day_start())
             o["model_cost"] = db.scalar("SELECT COALESCE(SUM(amount_micros),0) AS s FROM ledger_entries WHERE org_id = ? "
                                         "AND kind = 'model_cost' AND ts >= ?", (o["id"], ms))
-            o["revenue"] = db.scalar("SELECT COALESCE(SUM(amount_micros),0) AS s FROM ledger_entries WHERE org_id = ? "
-                                     "AND kind = 'revenue' AND ts >= ?", (o["id"], ms))
+            o["revenue"] = ledger.revenue(db, since="2000", org_id=o["id"])
+            o["sandbox_revenue"] = ledger.revenue(db, since="2000", org_id=o["id"], sandbox=True)
+            o["cleared"] = int(db.scalar("SELECT COALESCE(SUM(amount_cents),0) AS s FROM payments_in WHERE org_id = ? AND sandbox = 0 "
+                                         "AND status = 'paid' AND clears_at <= ?", (o["id"], iso())) or 0) * 10_000
         payees = db.all("SELECT p.*, o.name AS org_name FROM payees p LEFT JOIN orgs o ON o.id = p.org_id ORDER BY p.created_at DESC")
         entries = db.all("SELECT l.*, o.name AS org_name, a.name AS agent_name FROM ledger_entries l "
                          "JOIN orgs o ON o.id = l.org_id LEFT JOIN agents a ON a.id = l.agent_id "
@@ -591,6 +599,33 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         if settings.artifacts_dir.resolve() not in path.parents:
             raise HTTPException(400)
         return PlainTextResponse(path.read_text(errors="replace"))
+
+    register_connect(app, core, page)
+
+    @app.get("/pipeline", response_class=HTMLResponse)
+    async def pipeline(request: Request, org: str = ""):
+        from ..business import LEAD_STAGES, page_url, public_base
+        orgs = db.all("SELECT id, name, slug FROM orgs WHERE parent_org_id IS NOT NULL AND status != 'retired' ORDER BY created_at")
+        if not org and orgs:
+            org = orgs[0]["id"]
+        data: dict[str, Any] = {}
+        if org:
+            leads = db.all("SELECT * FROM leads WHERE org_id = ? ORDER BY updated_at DESC LIMIT 300", (org,))
+            data = {
+                "stages": {st: [l for l in leads if l["stage"] == st] for st in LEAD_STAGES},
+                "emails": db.all("SELECT e.*, l.company FROM emails e LEFT JOIN leads l ON l.id = e.lead_id WHERE e.org_id = ? "
+                                 "ORDER BY e.created_at DESC LIMIT 40", (org,)),
+                "offers": db.all("SELECT * FROM offers WHERE org_id = ? ORDER BY created_at DESC", (org,)),
+                "customers": db.all("SELECT c.*, o.name AS offer_name FROM customers c LEFT JOIN offers o ON o.id = c.offer_id "
+                                    "WHERE c.org_id = ? ORDER BY c.created_at DESC", (org,)),
+                "payments": db.all("SELECT p.*, c.company FROM payments_in p LEFT JOIN customers c ON c.id = p.customer_id "
+                                   "WHERE p.org_id = ? ORDER BY p.paid_at DESC LIMIT 50", (org,)),
+                "voice": db.all("SELECT * FROM voice_agents WHERE org_id = ? ORDER BY created_at DESC", (org,)),
+                "sites": [{**x, "url": page_url(db, settings, org, x["path"])} for x in
+                          db.all("SELECT id, path, title, updated_at FROM sites WHERE org_id = ? ORDER BY path", (org,))],
+                "base": public_base(db, settings),
+            }
+        return page(request, "pipeline.html", orgs=orgs, current=org, **data)
 
     @app.get("/healthz")
     async def healthz():

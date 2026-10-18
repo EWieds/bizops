@@ -188,6 +188,13 @@ def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[s
         out["digest"] = int(daily_digest(db, settings))
     if force or _due(db, "audit", float(cfg.get("audit_every_s", 3600))):
         out["findings"] = audit_checks(db, settings)
+    from . import business, simworld
+    if force or _due(db, "inbound", float(cfg.get("inbound_every_s", 15))):
+        out["sim"] = simworld.tick(db, settings)
+        out["inbound"] = business.process_inbound(db, settings)
+        out["goals_measured"] = business.measure_goals(db)
+    if force or _due(db, "followups", 900):
+        out["followups"] = business.followups_due(db, settings)
     acted = {k: v for k, v in out.items() if v}
     if acted:
         log_event(db, actor_kind="system", kind="system", action="maintenance", result=acted, outcome="ok")
@@ -218,3 +225,18 @@ def heartbeat_needed(db: Database, settings: Settings, agent: dict) -> tuple[boo
         if not last or (now() - last).total_seconds() > hours * 3600:
             return True, "daily review"
     return False, "nothing to act on"
+
+
+async def poll_connectors(core) -> dict[str, int]:
+    """Pull new replies from the mailbox and new payments from the billing provider."""
+    from . import business
+    out: dict[str, int] = {}
+    for name, fn in (("emails_in", business.poll_email), ("payments_in", business.poll_billing)):
+        try:
+            out[name] = await fn(core)
+        except Exception as e:
+            log_event(core.db, actor_kind="system", kind="system", action=f"poll.{name}", result={"error": str(e)[:300]},
+                      outcome="error")
+    if any(out.values()):
+        log_event(core.db, actor_kind="system", kind="system", action="connectors.poll", result=out, outcome="ok")
+    return out

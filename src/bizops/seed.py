@@ -18,6 +18,19 @@ def ensure_platform(core: Core) -> str:
     return create_org_from_template(core.db, core.settings, template="platform", created_by="system")
 
 
+OWNER_ASK = ("Find a new business we can run with AI agents that can make real money fast, and launch it. "
+             "B2B, low startup cost, something we can deliver ourselves.")
+
+
+def seed_venture(core: Core) -> dict[str, str]:
+    """The end-to-end demo: the owner asks the platform for a business; agents do the rest."""
+    root_id = ensure_platform(core)
+    pceo = org_ceo(core.db, root_id)
+    if not core.db.one("SELECT 1 AS x FROM messages WHERE sender_kind = 'human' AND body = ?", (OWNER_ASK,)):
+        human_message(core.db, core.settings, pceo["id"], OWNER_ASK, type="instruction")
+    return {"platform": root_id}
+
+
 def seed_demo(core: Core) -> dict[str, str]:
     db, settings = core.db, core.settings
     root_id = ensure_platform(core)

@@ -31,6 +31,8 @@ class Scheduler:
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
         self._last_sweep = -1e9
+        self._last_poll = -1e9
+        self._poll_task: asyncio.Task | None = None
 
     def poke(self) -> None:
         self._wake.set()
@@ -80,8 +82,18 @@ class Scheduler:
                   agent_id=agent_id, result={"why": why}, outcome="ok")
         return True
 
+    def poll(self) -> None:
+        loop = asyncio.get_running_loop()
+        every = float(self.core.settings.policy.get("heartbeats", {}).get("connector_poll_s", 60))
+        busy = self._poll_task is not None and not self._poll_task.done()
+        if not busy and loop.time() - self._last_poll >= every and not platform_paused(self.core.db):
+            self._last_poll = loop.time()
+            from .maintenance import poll_connectors
+            self._poll_task = asyncio.create_task(poll_connectors(self.core))
+
     async def tick(self) -> int:
         self.maintenance()
+        self.poll()
         started = 0
         for agent_id, reason in self.due_agents():
             if reason == "timer":
@@ -126,6 +138,9 @@ class Scheduler:
                 pending = self.core.db.scalar(
                     "SELECT COUNT(*) AS n FROM agents a JOIN orgs o ON o.id = a.org_id WHERE a.status = 'active' "
                     "AND o.status IN ('active','trial') AND a.wake_requested_at IS NOT NULL")
+                pending = (pending or 0) + int(self.core.db.scalar(
+                    "SELECT (SELECT COUNT(*) FROM sim_actions WHERE done = 0) + "
+                    "(SELECT COUNT(*) FROM emails WHERE direction = 'in' AND processed = 0) AS n") or 0)
                 if not pending or platform_paused(self.core.db):
                     return
                 await asyncio.sleep(0.2)  # a wake is pending behind a min interval

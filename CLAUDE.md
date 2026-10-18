@@ -9,6 +9,8 @@ Read ARCHITECTURE.md first. PLAN.md has the milestone plan and schema.
 - Server, live: `.venv/bin/bizops serve` (auto-detects model access: API key -> Claude login via `claude` CLI -> dry run)
 - Background service: `bizops install-service` (systemd/launchd/Windows task); one-shot setup: `bash scripts/install.sh`
 - Run background jobs once: `bizops maintain`
+- Public deploy: `bash scripts/deploy-fly.sh`; from a computer: `bizops serve --tunnel`; login: `bizops set-password`
+- The selling loop lives in business.py (+ tools/sales.py, connectors/); simworld.py is test-only.
 - Run the scheduler until idle (no server): `.venv/bin/bizops tick --dry-run`
 - Kill switches: `bizops pause all|org <id>|agent <id>`, `bizops resume ...`
 - Owner money: `bizops fund <org_id> <usd>`, `bizops payee "<name>" --org <id> --max 25`

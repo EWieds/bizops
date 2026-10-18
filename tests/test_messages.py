@@ -35,7 +35,7 @@ def test_ttl_expiry(core, org):
 
 
 async def test_cross_org_peer_refused_supervisor_edge_allowed(core, org):
-    other = create_org_from_template(core.db, core.settings, template="generic", name="Other Co",
+    other = create_org_from_template(core.db, core.settings, template="classic", name="Other Co",
                                      parent_org_id=org["root"], supervisor_agent_id=org["pceo"]["id"])
     other_coo = core.db.one("SELECT * FROM agents WHERE org_id = ? AND role = 'coo'", (other,))
     r = await invoke(Ctx(core=core, agent=org["coo"]), "message",

@@ -34,7 +34,7 @@ async def test_low_confidence_jev_falls_through_to_llm(core, org, monkeypatch):
 
 
 async def test_no_confident_verdict_blocks(core, org):
-    core.settings.policy["approver"]["chain"] = ["rules", "jev"]  # jev not configured -> abstains
+    core.settings.policy["approver"]["actions"]["pay"]["chain"] = ["rules", "jev"]  # jev not configured -> abstains
     v, _ = await Approver(core.settings, core.llm).review(agent=org["ceo"], tool_name="pay",
                                                           args={"memo": "m", "task_id": "t"}, reason="r", context={})
     assert v.verdict == "block" and v.approver == "fallback"

@@ -1,0 +1,13 @@
+# A minimal management chain (used by tests and for internal-only projects).
+monthly_cap_usd: 50
+settings: {max_agents: 12, max_depth: 4, max_reports: 6}
+playbook: |
+  Find a narrow customer, a painful problem and the cheapest test that proves someone will pay.
+  Measure everything; never claim a number you did not measure.
+agents:
+  - {key: ceo, role: ceo, name: CEO, budget_usd: 12, min_interval_s: 15}
+  - {key: coo, role: coo, name: COO, parent: ceo, budget_usd: 6}
+  - {key: cfo, role: cfo, name: CFO, parent: ceo, budget_usd: 5}
+  - {key: researcher, role: researcher, name: Researcher, parent: coo, budget_usd: 8}
+  - {key: marketer, role: marketer, name: Head of Growth, parent: coo, budget_usd: 8}
+  - {key: writer, role: writer, name: Copywriter, parent: marketer, budget_usd: 4}

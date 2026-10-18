@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from .approver import Approver
+from .connectors import Connectors
 from .config import Settings
 from .db import Database
 from .llm.base import LLMClient
@@ -66,8 +67,20 @@ class Core:
             self.backend, self.backend_why = llm.name, "provided"
         self.llm = llm
         self.payments = payments or make_provider(settings)
+        self.connectors = Connectors.from_settings(settings)
         self.approver = Approver(settings, self.llm)
         self.web = WebClient(settings, self.llm)
+
+    def reload_connectors(self) -> None:
+        """After the owner connects accounts on the Connect page."""
+        self.connectors = Connectors.from_settings(self.settings)
+        if self.llm.name != "dry-run" or not self.settings.dry_run:
+            backend, why = detect_backend(self.settings)
+            if backend != self.backend:
+                self.backend, self.backend_why = backend, why
+                self.llm = make_llm(self.settings, backend)
+                self.approver = Approver(self.settings, self.llm)
+                self.web = WebClient(self.settings, self.llm)
 
     def init(self) -> "Core":
         self.db.migrate()

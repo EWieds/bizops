@@ -31,7 +31,7 @@ def _due(due: str | int | float | None) -> str:
 
 def set_goal(db: Database, settings: Settings, *, setter: dict | None, owner_id: str, title: str, metric: str,
              target: float | None, unit: str = "", due: str | int | None = None, parent_goal_id: str | None = None,
-             review_every_days: float = 3) -> dict:
+             review_every_days: float = 3, metric_key: str | None = None) -> dict:
     owner = get_agent(db, owner_id)
     if not owner or owner["status"] == "retired":
         raise PolicyRefusal("goal.owner", f"no active agent {owner_id}")
@@ -45,6 +45,9 @@ def set_goal(db: Database, settings: Settings, *, setter: dict | None, owner_id:
         raise PolicyRefusal("goal.too_many", "max 5 active goals per agent: focus, or drop one first")
     if parent_goal_id and not db.one("SELECT 1 AS x FROM goals WHERE id = ? AND org_id = ?", (parent_goal_id, owner["org_id"])):
         raise PolicyRefusal("goal.parent", "parent goal not found in this org")
+    from .business import METRIC_KEYS
+    if metric_key and metric_key not in METRIC_KEYS:
+        raise PolicyRefusal("goal.metric_key", f"metric_key must be one of {', '.join(METRIC_KEYS)}")
     review_s = int(max(0.5, float(review_every_days)) * 86400)
     ts = iso()
     row = {
@@ -53,6 +56,7 @@ def set_goal(db: Database, settings: Settings, *, setter: dict | None, owner_id:
         "measured_value": None, "measured_source": None, "measured_at": None, "due_at": _due(due),
         "review_every_s": review_s, "next_review_at": iso_in(review_s), "status": "active", "progress_note": "",
         "created_by": setter["id"] if setter else "human", "created_at": ts, "updated_at": ts,
+        "metric_key": metric_key or None,
     }
     with db.tx() as conn:
         insert(conn, "goals", row)

@@ -15,12 +15,15 @@ from . import Ctx, ToolOutput, tool
                   "target": {"type": "number"}, "unit": {"type": "string"},
                   "due": {"type": "string", "description": "YYYY-MM-DD or number of days from now"},
                   "parent_goal_id": {"type": "string"},
-                  "review_every_days": {"type": "number", "description": "review cadence, default 3"}},
+                  "review_every_days": {"type": "number", "description": "review cadence, default 3"},
+                  "metric_key": {"type": "string", "description": "optional: measured automatically from real data. One of: "
+                                 "revenue_usd, customers, mrr_usd, leads, emails_sent, replies, live_voice_agents"}},
       required=["owner", "title", "metric", "target", "due"])
 async def set_goal_tool(ctx: Ctx, args: dict) -> ToolOutput:
     g = set_goal(ctx.db, ctx.settings, setter=ctx.agent, owner_id=args["owner"], title=args["title"],
                  metric=args["metric"], target=args.get("target"), unit=args.get("unit", ""), due=args.get("due"),
-                 parent_goal_id=args.get("parent_goal_id"), review_every_days=args.get("review_every_days") or 3)
+                 parent_goal_id=args.get("parent_goal_id"), review_every_days=args.get("review_every_days") or 3,
+                 metric_key=args.get("metric_key") or None)
     return ToolOutput({"goal_id": g["id"], "due": g["due_at"][:10], "next_review": g["next_review_at"][:16]},
                       ref_type="goal", ref_id=g["id"])
 

@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% from "_macros.html" import card %}
+{% block body %}
+<h1 class="text-2xl font-semibold mb-1">Connect (one time)</h1>
+<p class="text-slate-500 mb-4">These accounts must be in your name, by law. Connect each once for the whole umbrella; every business uses them, and every dollar is labeled with the business that earned it. Each connection is tested before it's saved. Secrets are stored only in this server's <code>.env</code>.</p>
+{% if msg %}<div class="bg-green-100 text-green-900 p-2 rounded mb-3">{{ msg }}</div>{% endif %}
+{% if err %}<div class="bg-red-100 text-red-900 p-2 rounded mb-3">{{ err }}</div>{% endif %}
+<div class="grid lg:grid-cols-2 gap-4">
+{% macro field(name, label, help='', type='text') %}
+<label class="block text-xs mb-2">{{ label }}<input name="{{ name }}" type="{{ type }}" value="{{ values[name] }}" class="mt-0.5 w-full border rounded p-1.5 text-sm" autocomplete="off">{% if help %}<span class="text-slate-500">{{ help }}</span>{% endif %}</label>
+{% endmacro %}
+{% call card("1. Get paid: Stripe", '<span class="pill ' ~ ('o-ok' if status.billing == 'stripe' else 'o-muted') ~ '">' ~ status.billing ~ '</span>') %}
+<p class="text-xs text-slate-600 mb-2">Create a Stripe account (stripe.com, 10 minutes, needs ID and bank). In the Stripe dashboard: Developers -> API keys -> create a <b>restricted key</b> with write access to Products, Prices, Payment Links and read access to Checkout Sessions and Events. Payments land in your Stripe balance and pay out to your bank; each one is tagged with its business.</p>
+<form method="post" action="/connect/stripe">{{ field('STRIPE_SECRET_KEY', 'Stripe secret or restricted key (rk_live_... or sk_live_...)') }}<button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Test and save</button></form>
+{% endcall %}
+{% call card("2. Send and receive email", '<span class="pill ' ~ ('o-ok' if status.email == 'smtp' else 'o-muted') ~ '">' ~ status.email ~ '</span>') %}
+<p class="text-xs text-slate-600 mb-2">Use a mailbox on a domain you own (e.g. Google Workspace, Zoho, Fastmail), not your personal address. Use an app password. Agents send at most 40 emails per business per day, B2B only, each with your identity, postal address and an unsubscribe link.</p>
+<form method="post" action="/connect/email" class="grid grid-cols-2 gap-x-3">
+{{ field('SMTP_HOST', 'SMTP host', 'e.g. smtp.gmail.com') }}{{ field('SMTP_PORT', 'SMTP port', '587 or 465') }}
+{{ field('SMTP_USER', 'Username') }}{{ field('SMTP_PASSWORD', 'App password', '', 'password') }}
+{{ field('IMAP_HOST', 'IMAP host (to read replies)', 'e.g. imap.gmail.com') }}{{ field('IMAP_PORT', 'IMAP port', '993') }}
+{{ field('EMAIL_FROM', 'From address', 'e.g. hello@yourdomain.com') }}{{ field('SENDER_NAME', 'Legal sender name', 'you or your company') }}
+<div class="col-span-2">{{ field('SENDER_ADDRESS', 'Postal address (required by CAN-SPAM)', 'a PO box or virtual mailbox is fine') }}</div>
+<div><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Test and save</button></div></form>
+{% endcall %}
+{% call card("3. Phone calls for voice products (optional)", '<span class="pill ' ~ ('o-ok' if status.voice == 'vapi' else 'o-muted') ~ '">' ~ status.voice ~ '</span>') %}
+<p class="text-xs text-slate-600 mb-2">Only needed if a business sells phone agents. Without it, voice agents still work as live web demos. With a Vapi account (vapi.ai), agents also create real phone assistants; you attach phone numbers in Vapi (telephony needs your identity). Inbound calls only.</p>
+<form method="post" action="/connect/voice">{{ field('VAPI_API_KEY', 'Vapi private API key') }}<button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Test and save</button></form>
+{% endcall %}
+{% call card("4. Web address and login") %}
+<p class="text-xs text-slate-600 mb-1">Public URL for business websites, demos and checkout: <b>{{ public_url }}</b></p>
+<form method="post" action="/connect/site">{{ field('PUBLIC_BASE_URL', 'Public URL (set automatically when deployed)') }}<button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Save</button></form>
+<form method="post" action="/connect/password" class="mt-3"><label class="block text-xs mb-2">Owner password {{ '(set)' if has_password else '(not set: the dashboard only works from this machine)' }}
+<input name="password" type="password" class="mt-0.5 w-full border rounded p-1.5 text-sm"></label><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Set password</button></form>
+{% endcall %}
+{% call card("Model access (automatic)") %}
+<p class="text-xs text-slate-600 mb-2">Detected: <b>{{ backend_label }}</b> ({{ backend_why }}). On a server, paste a long-lived Claude token (run <code>claude setup-token</code> on your computer) or an Anthropic API key. For heavy 24/7 use an API key is the supported route; a subscription token has usage limits.</p>
+<form method="post" action="/connect/models" class="grid grid-cols-2 gap-x-3">{{ field('CLAUDE_CODE_OAUTH_TOKEN', 'Claude token (from claude setup-token)') }}{{ field('ANTHROPIC_API_KEY', 'or Anthropic API key') }}
+{{ field('BRAVE_API_KEY', 'Brave Search key (optional)') }}{{ field('JEV_API_URL', 'Jev approver URL (optional)') }}
+<div><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Save</button></div></form>
+{% endcall %}
+</div>
+{% endblock %}

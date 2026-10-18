@@ -15,20 +15,66 @@ def _core(args: argparse.Namespace) -> Core:
     return Core(settings).init()
 
 
+def _bootstrap_security(core) -> str | None:
+    """BIZOPS_PASSWORD (e.g. from a deploy secret) becomes the owner login. Returns a new password if one
+    had to be generated for a public bind."""
+    import os
+    import secrets
+
+    from .web.auth import set_password
+    env = core.settings.home / ".env"
+    if os.environ.get("BIZOPS_PASSWORD") and not os.environ.get("BIZOPS_PASSWORD_HASH"):
+        set_password(env, os.environ["BIZOPS_PASSWORD"])
+    return None
+
+
 def cmd_serve(args: argparse.Namespace) -> None:
+    import asyncio as _asyncio
+    import os
+    import secrets
+
     import uvicorn
 
+    from .engine import set_setting
     from .web.app import create_app
+    from .web.auth import set_password
     core = _core(args)
-    from .seed import ensure_platform, seed_demo
-    seed_demo(core) if args.dry_run or args.seed else ensure_platform(core)
+    _bootstrap_security(core)
+    if os.environ.get("FLY_APP_NAME") and not os.environ.get("PUBLIC_BASE_URL"):
+        os.environ["PUBLIC_BASE_URL"] = f"https://{os.environ['FLY_APP_NAME']}.fly.dev"
+    if os.environ.get("PUBLIC_BASE_URL"):
+        set_setting(core.db, "public_base_url", os.environ["PUBLIC_BASE_URL"].rstrip("/"))
+    public = args.host not in ("127.0.0.1", "localhost", "::1") or args.tunnel
+    new_pw = None
+    if public and not os.environ.get("BIZOPS_PASSWORD_HASH"):
+        new_pw = secrets.token_urlsafe(14)
+        set_password(core.settings.home / ".env", new_pw)
+    from .seed import ensure_platform, seed_venture
+    seed_venture(core) if args.dry_run or args.seed else ensure_platform(core)
     mode = ("DRY-RUN (scripted model, no tokens spent)" if core.backend == "dry_run"
             else f"LIVE via {core.backend}") + f" - {core.backend_why}"
     print(f"bizops: {mode}\n  db: {core.settings.db_path}\n  dashboard: http://{args.host}:{args.port}")
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
-        print("  WARNING: the dashboard has no auth. Only bind to a private network.", file=sys.stderr)
-    uvicorn.run(create_app(core, run_scheduler=not args.no_scheduler), host=args.host, port=args.port,
-                log_level="warning")
+    if new_pw:
+        print(f"  owner password (generated, saved to .env): {new_pw}")
+    app = create_app(core, run_scheduler=not args.no_scheduler)
+
+    async def main() -> None:
+        server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="warning"))
+        proc = None
+        if args.tunnel:
+            from .tunnel import start_quick_tunnel
+            proc, url = await start_quick_tunnel(args.port)
+            if url:
+                set_setting(core.db, "public_base_url", url)
+                print(f"  public URL (Cloudflare quick tunnel): {url}")
+            else:
+                print("  tunnel: install cloudflared for a public URL (brew install cloudflared)", file=sys.stderr)
+        try:
+            await server.serve()
+        finally:
+            if proc:
+                proc.terminate()
+    _asyncio.run(main())
 
 
 def cmd_seed(args: argparse.Namespace) -> None:
@@ -111,7 +157,13 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--no-scheduler", action="store_true")
+    s.add_argument("--tunnel", action="store_true", help="public URL from this computer via a Cloudflare quick tunnel")
     s.set_defaults(fn=cmd_serve)
+
+    s = sub.add_parser("set-password", help="set the owner login password for the dashboard")
+    s.add_argument("password")
+    s.set_defaults(fn=lambda a: (__import__("bizops.web.auth", fromlist=["set_password"]).set_password(
+        _core(a).settings.home / ".env", a.password), print("password set")))
 
     s = sub.add_parser("seed", help="create the platform org and the demo company")
     s.add_argument("--dry-run", action="store_true")
