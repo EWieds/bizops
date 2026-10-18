@@ -101,3 +101,19 @@ venture:
   max_on_trial: 3
   starting_cap_usd: 50
   templates: [generic, voice-agent-sales, rank-and-rent, digital-products]
+
+# Quality bar: outbound work is scored against a professional rubric (0-4) before it ships, by Jev when
+# TYPESAFE_API_KEY is set, else by the cheapest Claude tier. Below the bar it is sent back with feedback.
+quality:
+  enabled: true
+  outreach_min: 3          # cold emails must be "good": specific, honest, one clear ask
+  reply_min: 2.5
+  page_min: 2.5
+  deliverable_min: 0.35    # "done" must actually meet the task's deliverable
+  min_confidence: 0.5
+
+# Cheap, fast routing with Jev (or the cheapest Claude tier when Jev isn't configured).
+routing:
+  triage_heartbeats: true  # ask "is a full work session worth it now?" before a review heartbeat
+  route_models: true       # simple wake-ups run on a cheaper model tier (never a more expensive one)
+  min_confidence: 0.75

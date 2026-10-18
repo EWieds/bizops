@@ -167,6 +167,9 @@ async def send_email(ctx: Ctx, args: dict) -> ToolOutput:
     kind = args.get("kind") or "outreach"
     if kind == "customer" and not ctx.db.one("SELECT 1 AS x FROM customers WHERE lead_id = ?", (lead["id"],)):
         kind = "reply" if lead["last_reply_at"] else "outreach"
+    from ..decide import quality_gate
+    await quality_gate(ctx.core, org_id=ctx.agent["org_id"], kind=kind, text=f"Subject: {args['subject']}\n\n{args['body']}",
+                       context={"recipient": {k: lead[k] for k in ("company", "industry", "city", "contact_name")}})
     out = await business.send_email(ctx.core, agent=ctx.agent, lead_id=lead["id"], subject=args["subject"],
                                     body=args["body"], kind=kind)
     return ToolOutput(out, ref_type="email", ref_id=out["email_id"])
@@ -212,6 +215,9 @@ async def send_payment_link(ctx: Ctx, args: dict) -> ToolOutput:
         link = f"{business.public_base(ctx.db, ctx.settings)}/pay/{offer['id']}?ref={lead['id']}"
     price = f"${offer['price_cents'] / 100:,.2f}" + ("/month" if offer["interval"] == "month" else "")
     body = f"{args['message'].rstrip()}\n\n{offer['name']}: {price}\nSign up here: {link}"
+    from ..decide import quality_gate
+    await quality_gate(ctx.core, org_id=ctx.agent["org_id"], kind="reply", text=body,
+                       context={"recipient": {k: lead[k] for k in ("company", "industry", "city")}})
     out = await business.send_email(ctx.core, agent=ctx.agent, lead_id=lead["id"], subject=args.get("subject") or f"{offer['name']}: sign-up link",
                                     body=body, kind="reply")
     ctx.db.execute("UPDATE leads SET stage = 'proposal' WHERE id = ? AND stage NOT IN ('won')", (lead["id"],))
@@ -249,6 +255,8 @@ async def update_customer(ctx: Ctx, args: dict) -> ToolOutput:
       properties={"path": {"type": "string"}, "title": {"type": "string"}, "html": {"type": "string"}},
       required=["path", "title", "html"])
 async def publish_page(ctx: Ctx, args: dict) -> ToolOutput:
+    from ..decide import quality_gate
+    await quality_gate(ctx.core, org_id=ctx.agent["org_id"], kind="page", text=args["html"], context={"title": args["title"]})
     r = business.publish_page(ctx.db, agent=ctx.agent, path=args["path"], title=args["title"], html_body=args["html"])
     url = business.page_url(ctx.db, ctx.settings, ctx.agent["org_id"], r["path"])
     return ToolOutput({"url": url, **r}, ref_type="site", ref_id=r["site_id"])

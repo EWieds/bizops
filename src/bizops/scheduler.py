@@ -71,13 +71,28 @@ class Scheduler:
             if not platform_paused(self.core.db):
                 run_jobs(self.core.db, self.core.settings)
 
-    def skip_heartbeat(self, agent_id: str) -> bool:
-        """Timer wake with nothing to act on: reschedule for free instead of running the model."""
+    async def skip_heartbeat(self, agent_id: str) -> bool:
+        """Timer wake with nothing to act on: reschedule for free instead of running the model. For a
+        routine review, ask Jev (or the cheapest model) whether a full work session is worth it."""
         db = self.core.db
         agent = get_agent(db, agent_id)
         if not agent:
             return True
         needed, why = heartbeat_needed(db, self.core.settings, agent)
+        routing = self.core.settings.policy.get("routing", {})
+        if needed and why == "daily review" and routing.get("triage_heartbeats", True) and self.core.llm.name != "dry-run":
+            from .decide import charge
+            from .runtime import preview_context
+            try:
+                d = await self.core.decider.noul(
+                    preview_context(self.core, agent),
+                    f"This is the scheduled review for a {agent['role']}. Is there anything that needs a full work "
+                    "session now (a decision, a stuck task, a goal at risk, a deliverable to produce)?")
+                charge(db, agent["org_id"], d, "heartbeat triage")
+                if d.value < 0.3 and d.confidence >= float(routing.get("min_confidence", 0.75)) - 0.35:
+                    needed, why = False, f"triage: nothing worth a session (p={d.value:.2f}, {d.source})"
+            except Exception:
+                pass
         if needed:
             return False
         db.execute("UPDATE agents SET next_wake_at = ?, last_heartbeat_skip_at = ? WHERE id = ?",
@@ -95,13 +110,25 @@ class Scheduler:
             from .maintenance import poll_connectors
             self._poll_task = asyncio.create_task(poll_connectors(self.core))
 
+    async def inbound(self) -> None:
+        loop = asyncio.get_running_loop()
+        every = float(self.core.settings.policy.get("heartbeats", {}).get("inbound_every_s", 15))
+        if loop.time() - getattr(self, "_last_inbound", -1e9) >= every and not platform_paused(self.core.db):
+            self._last_inbound = loop.time()
+            from .business import process_inbound_smart
+            try:
+                await process_inbound_smart(self.core)
+            except Exception:
+                log.exception("inbound triage failed")
+
     async def tick(self) -> int:
         self.maintenance()
+        await self.inbound()
         self.poll()
         started = 0
         for agent_id, reason in self.due_agents():
             if reason == "timer":
-                if self.skip_heartbeat(agent_id):
+                if await self.skip_heartbeat(agent_id):
                     continue
                 reason = "heartbeat"
             self.running[agent_id] = asyncio.create_task(self._run(agent_id, reason))

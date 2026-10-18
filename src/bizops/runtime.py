@@ -204,6 +204,35 @@ def preview_context(core: Core, agent: dict) -> str:
     return text.split("\n<context_json>")[0]
 
 
+TIER_ORDER = ["bulk", "worker", "exec"]
+
+
+async def route_model(core: Core, agent: dict, model: str, context: str) -> tuple[str, str | None]:
+    """Cheaper model for simple wake-ups (never a more expensive one), decided by Jev or the cheapest tier."""
+    routing = core.settings.policy.get("routing", {})
+    if not routing.get("route_models", True) or core.llm.name == "dry-run" or agent.get("model_override"):
+        return model, None
+    own = agent["model_tier"] if agent["model_tier"] in TIER_ORDER else "worker"
+    if own == "bulk":
+        return model, None
+    from .decide import charge
+    try:
+        d = await core.decider.choice(
+            context[:6000], f"How demanding is the work this {agent['role']} must do on this wake-up?",
+            {"simple": "routine: acknowledge, log a status, a short factual reply, or nothing to do",
+             "standard": "normal work: write, research, plan, or reply with judgment",
+             "complex": "high stakes: strategy, money, a hard negotiation, many interdependent steps"})
+    except Exception:
+        return model, None
+    charge(core.db, agent["org_id"], d, "model routing")
+    if d.confidence < float(routing.get("min_confidence", 0.75)):
+        return model, None
+    target = {"simple": "bulk", "standard": "worker", "complex": own}.get(str(d.value), own)
+    if TIER_ORDER.index(target) >= TIER_ORDER.index(own):
+        return model, None
+    return core.settings.models["tiers"][target], f"{own}->{target} ({d.source})"
+
+
 async def run_agent(core: Core, agent_id: str, reason: str = "manual") -> str | None:
     db, settings = core.db, core.settings
     agent = get_agent(db, agent_id)
@@ -232,6 +261,11 @@ async def run_agent(core: Core, agent_id: str, reason: str = "manual") -> str | 
               run_id=run_id, args={"reason": reason, "model": model}, outcome="ok", ref_type="run", ref_id=run_id)
 
     text, _, msg_ids = gather_context(core, agent, reason)
+    model, routed = await route_model(core, agent, model, text)
+    if routed:
+        db.execute("UPDATE runs SET model = ? WHERE id = ?", (model, run_id))
+        log_event(db, actor_kind="system", kind="run", action="model.route", org_id=agent["org_id"], agent_id=agent_id,
+                  run_id=run_id, result={"route": routed, "model": model}, outcome="ok")
     if msg_ids:
         marks = ",".join("?" for _ in msg_ids)
         db.execute(f"UPDATE messages SET status = 'read', read_at = ? WHERE id IN ({marks})", (iso(), *msg_ids))

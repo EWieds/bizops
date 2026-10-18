@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .approver import Approver
 from .connectors import Connectors
+from .decide import Decider
 from .config import Settings
 from .db import Database
 from .llm.base import LLMClient
@@ -70,6 +71,8 @@ class Core:
         self.connectors = Connectors.from_settings(settings)
         self.approver = Approver(settings, self.llm)
         self.web = WebClient(settings, self.llm)
+        self.decider = Decider(settings, self.llm)
+        self.approver.decider = self.decider
 
     def reload_connectors(self) -> None:
         """After the owner connects accounts on the Connect page."""
@@ -81,6 +84,8 @@ class Core:
                 self.llm = make_llm(self.settings, backend)
                 self.approver = Approver(self.settings, self.llm)
                 self.web = WebClient(self.settings, self.llm)
+                self.decider = Decider(self.settings, self.llm)
+                self.approver.decider = self.decider
 
     def init(self) -> "Core":
         self.db.migrate()

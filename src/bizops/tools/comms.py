@@ -72,6 +72,11 @@ async def create_task_tool(ctx: Ctx, args: dict) -> ToolOutput:
                   "blocked_reason": {"type": "string"}},
       required=["task_id", "status"])
 async def update_task_tool(ctx: Ctx, args: dict) -> ToolOutput:
+    if args["status"] == "done" and args.get("result"):
+        task = ctx.db.one("SELECT deliverable, org_id FROM tasks WHERE id = ?", (args["task_id"],))
+        if task:
+            from ..decide import deliverable_check
+            await deliverable_check(ctx.core, org_id=task["org_id"], deliverable=task["deliverable"], result=args["result"])
     t = update_task(ctx.db, actor=ctx.agent, task_id=args["task_id"], status=args["status"],
                     result=args.get("result"), blocked_reason=args.get("blocked_reason"))
     return ToolOutput({"task_id": t["id"], "status": t["status"]}, ref_type="task", ref_id=t["id"])
