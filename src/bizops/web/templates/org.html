@@ -1,0 +1,41 @@
+{% extends "base.html" %}{% from "_macros.html" import pause_btn, card %}
+{% macro node(a) %}
+<li class="ml-4 mt-1">
+  <a href="/agents/{{ a.id }}" class="underline font-medium {{ 'text-slate-400' if a.status != 'active' }}">{{ a.name }}</a>
+  <span class="text-xs text-slate-500">{{ a.role }} · {{ a.model_tier }} · {{ (spend.get(a.id) or 0)|usd }} / {{ a.budget_micros|usd }} · last run {{ a.last_run_at|ago }}</span>
+  {% if a.status != 'active' %}<span class="pill o-refused">{{ a.status }}</span>{% endif %}
+  {% if a.children %}<ul class="border-l border-slate-200">{% for c in a.children %}{{ node(c) }}{% endfor %}</ul>{% endif %}
+</li>
+{% endmacro %}
+{% block body %}
+<div class="flex items-center gap-3 mb-3">
+  <span class="dot dot-{{ org.health }}"></span><h1 class="text-xl font-semibold">{{ org.name }}</h1>
+  <span class="text-slate-500">{{ org.template }} · {{ org.status }}</span>{{ pause_btn('org', org.id, org.status) }}
+  <a class="underline text-xs" href="/activity?org={{ org.id }}">activity</a>
+</div>
+<div class="grid md:grid-cols-3 gap-4">
+<div class="md:col-span-2">
+{% call card("Org chart") %}<ul class="-ml-4">{% for a in tree %}{{ node(a) }}{% endfor %}</ul>{% endcall %}
+{% call card("Tasks") %}
+<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Task</th><th>Assignee</th><th>Status</th><th>Updated</th></tr></thead><tbody>
+{% for t in tasks %}<tr class="border-t align-top"><td class="py-1">{{ t.title }}<div class="text-xs text-slate-500">deliverable: {{ t.deliverable }}{% if t.result %} · result: {{ t.result[:160] }}{% endif %}{% if t.blocked_reason %} · <span class="text-violet-700">{{ t.blocked_reason }}</span>{% endif %}</div></td>
+<td>{{ t.assignee }}</td><td><span class="pill {{ 'o-hard_stop' if t.status == 'blocked' else 'o-ok' if t.status == 'done' else 'o-pending' }}">{{ t.status }}</span></td><td class="text-xs">{{ t.updated_at|ago }}</td></tr>{% else %}<tr><td class="text-slate-500">No tasks yet.</td></tr>{% endfor %}
+</tbody></table>
+{% endcall %}
+</div>
+<div>
+{% call card("Budget") %}
+<div>Spend this month: <b>{{ spent|usd }}</b> of {{ org.monthly_cap_micros|usd }}</div>
+<div>Wallet: <b>{{ wallet|usd }}</b> <a class="underline text-xs" href="/money">fund</a></div>
+<div class="text-xs text-slate-500 mt-1">Limits: max agents {{ settings_json.max_agents }}, depth {{ settings_json.max_depth }}</div>
+{% if org.health_reasons %}<div class="text-xs mt-1">Health: {{ org.health_reasons|join(', ') }}</div>{% endif %}
+{% endcall %}
+{% call card("Brief") %}<pre class="text-xs">{{ org.brief or '(none)' }}</pre>{% endcall %}
+{% call card("Artifacts") %}
+{% for a in artifacts %}<div><a class="underline" href="/artifacts/{{ a.id }}">{{ a.name }}</a> <span class="text-xs text-slate-500">{{ a.agent }} · {{ a.created_at|ago }}</span></div>{% else %}<div class="text-slate-500">None yet.</div>{% endfor %}
+{% endcall %}
+{% call card("Knowledge base") %}
+{% for k in kb %}<details><summary>{{ k.key }}</summary><pre class="text-xs">{{ k.body }}</pre></details>{% else %}<div class="text-slate-500">Empty.</div>{% endfor %}
+{% endcall %}
+</div></div>
+{% endblock %}

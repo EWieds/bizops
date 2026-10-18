@@ -1,0 +1,65 @@
+# Standing authorizations and guardrails. Set once by the owner; enforced in code.
+# Agents can read the effect of these rules (refusals) but can never change them.
+
+platform:
+  monthly_cap_usd: 200        # total platform spend (model cost + payments) per month
+  daily_cap_usd: 25           # total platform spend per UTC day
+  hard_ceiling_usd: 1000      # no cap anywhere may be raised above this
+
+messages:
+  max_hops: 6                 # reply chain depth before the gateway refuses (anti ping-pong)
+  ttl_hours: 24               # unread messages expire and never wake anyone
+
+runs:
+  max_turns: 12               # model calls per agent run
+  max_tokens_per_run: 250000  # input + output tokens per agent run
+  max_concurrent_runs: 4
+  default_min_interval_s: 30
+
+# Action classes -> standing authorization. 'allow' means agents act without asking.
+authorizations:
+  internal: allow             # messages, tasks, notes, files
+  web_read: allow             # search, fetch pages
+  spend: allow                # payments inside budgets, to owner-allowlisted payees only
+  publish: allow              # (M4) sites, content
+  email_b2b: allow            # (M4) with sender identification and opt-out
+
+# The fixed list the system cannot do for you. Always lands in the needs-a-human queue.
+hard_stops:
+  legal_commitment: "Signing contracts or any legally binding commitment (incl. government bids, registrations, certifications)"
+  identity_account: "Opening accounts that need identity verification (bank, payments, ads, telephony)"
+  consumer_voice_sms: "Outbound AI voice calls or texts to consumers without documented consent"
+  raise_cap: "Raising a cap past the owner's ceiling"
+  external_transfer: "Moving money outside the platform (owner distributions, unlisted payees)"
+  new_payee: "Adding a payee to the allowlist"
+
+# Per-agent per-hour rate limits by tool name. '*' is the default for unlisted tools.
+rate_limits:
+  "*": 120
+  web_search: 60
+  fetch_url: 120
+  pay: 10
+
+# Pre-screening: actions in this list go through the approver chain before running.
+# The chain allows or blocks on its own. It never waits for a human.
+approver:
+  screen: [pay]
+  chain: [rules, jev, llm]    # first decisive verdict wins; 'rules' always runs first
+  min_confidence: 0.7         # below this the action is blocked (logged, overridable)
+  on_unavailable: block       # if no approver can give a verdict for a screened action
+
+money:
+  per_payment_max_usd: 50          # absolute max for any single payment
+  daily_payments_max_usd_per_org: 100
+  cap_raise:                        # the v0 guardrail
+    profitable_months_required: 2
+    max_monthly_increase_pct: 25
+
+web:
+  fetch_timeout_s: 15
+  max_bytes: 2000000
+  max_chars_returned: 20000
+  max_concurrent: 8
+  cache_ttl_s: 900
+  blocked_domains: []
+  search_provider: auto         # auto | anthropic | brave | dry_run

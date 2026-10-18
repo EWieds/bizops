@@ -1,0 +1,41 @@
+{% extends "base.html" %}{% from "_macros.html" import card %}
+{% block body %}
+{% call card("Needs a human (hard stops only)") %}
+<p class="text-xs text-slate-500 mb-2">The short fixed list the system cannot do for you, by law or identity. Agents marked the task blocked and kept working on other things.</p>
+{% for d in hard %}
+<div class="border-t py-2 {{ 'opacity-60' if d.status != 'open' }}">
+  <div><span class="pill o-hard_stop">{{ d.rule.replace('hard_stop.', '') }}</span> <b>{{ d.org_name }}</b> · {{ d.agent_name }} · {{ d.ts|ago }} · {{ d.status }}{% if d.resolution %} · {{ d.resolution }}{% endif %}</div>
+  <div class="text-xs text-slate-600">{{ hard_stops.get(d.rule.replace('hard_stop.', ''), '') }}</div>
+  {% set a = d.args_json|loads %}
+  <div class="mt-1">{{ a.summary or a.details or '' }}{% if a.name %} <b>Payee: {{ a.name }}</b>{% endif %}{% if d.task_title %} <span class="text-xs text-slate-500">(task: {{ d.task_title }})</span>{% endif %}</div>
+  {% if d.status == 'open' %}
+    {% if d.action == 'request_payee' %}
+    <form method="post" action="/decisions/{{ d.id }}/payee" class="mt-1 flex flex-wrap gap-2 text-xs items-end">
+      <label>Name<br><input name="name" value="{{ a.name }}" class="border rounded p-1"></label>
+      <label>Max per payment $<br><input name="max_usd" value="25" size="5" class="border rounded p-1"></label>
+      <label>Notes<br><input name="notes" value="{{ (a.details or '')[:120] }}" class="border rounded p-1"></label>
+      <button class="px-2 py-1 rounded bg-green-700 text-white">Add payee</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/decisions/{{ d.id }}/resolve" class="mt-1 flex gap-2 text-xs">
+      <input name="note" placeholder="what you did (sent to the agent)" class="border rounded p-1 flex-1">
+      <button name="outcome" value="done" class="px-2 py-1 rounded bg-slate-800 text-white">Done, unblock task</button>
+      <button name="outcome" value="declined" class="px-2 py-1 rounded border">Decline</button>
+    </form>
+  {% endif %}
+</div>
+{% else %}<div class="text-slate-500">Nothing needs you.</div>{% endfor %}
+{% endcall %}
+{% call card("Blocked actions (refused by the policy engine, budget or approver)") %}
+<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>When</th><th>Org / agent</th><th>Action</th><th>Rule</th><th>Approver</th><th></th></tr></thead><tbody>
+{% for d in blocked %}<tr class="border-t align-top"><td class="text-xs">{{ d.ts|ago }}</td><td class="text-xs">{{ d.org_name }}<br>{{ d.agent_name }}</td>
+<td><code class="text-xs">{{ d.action }}</code><div class="text-xs text-slate-500">{{ (d.args_json or '')[:160] }}</div></td>
+<td><code class="text-xs">{{ d.rule }}</code></td><td class="text-xs">{{ d.approver or '' }}{% if d.approver_reason %}: {{ d.approver_reason }}{% endif %}</td>
+<td>{% if d.status != 'resolved' and d.action != 'llm.call' %}<form method="post" action="/decisions/{{ d.id }}/override" onsubmit="return confirm('Run this action now as an owner override? Kill switches and budgets still apply.')"><button class="text-xs px-2 py-0.5 rounded border border-amber-600 text-amber-700">override</button></form>{% else %}<span class="text-xs text-slate-500">{{ d.resolution or '' }}</span>{% endif %}</td></tr>
+{% else %}<tr><td class="text-slate-500">Nothing blocked.</td></tr>{% endfor %}
+</tbody></table>
+{% endcall %}
+{% call card("Recently allowed by the approver") %}
+{% for d in allowed %}<div class="border-t py-1 text-xs"><code>{{ d.action }}</code> · {{ d.agent_name }} · {{ d.approver }} ({{ d.confidence }}): {{ d.approver_reason }} · {{ d.ts|ago }}</div>{% else %}<div class="text-slate-500 text-xs">None.</div>{% endfor %}
+{% endcall %}
+{% endblock %}

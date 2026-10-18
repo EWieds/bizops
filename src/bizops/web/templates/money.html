@@ -1,0 +1,30 @@
+{% extends "base.html" %}{% from "_macros.html" import card %}
+{% block body %}
+{% call card("Caps") %}
+<div>Platform: {{ caps.month|usd }} of {{ caps.monthly|usd }} this month · {{ caps.day|usd }} of {{ caps.daily|usd }} today · hard ceiling {{ caps.ceiling|usd }}</div>
+<div class="text-xs text-slate-500">Payment limits: {{ '$%s'|format(money.per_payment_max_usd) }} per payment, {{ '$%s'|format(money.daily_payments_max_usd_per_org) }} per org per day. Change them in config/policy.yaml.</div>
+{% endcall %}
+{% call card("Org wallets") %}
+<p class="text-xs text-slate-500 mb-2">Wallets are internal allocations. Agents can only pay owner-allowlisted payees from them. Real cash stays in your accounts; the payments provider is <b>sandbox</b> unless you configure a real one.</p>
+<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Org</th><th>Wallet</th><th>Paid today</th><th>Spend (month)</th><th>Model cost</th><th>Verified revenue</th><th>Deposit</th></tr></thead><tbody>
+{% for o in orgs %}<tr class="border-t"><td>{{ o.name }}</td><td><b>{{ o.wallet|usd }}</b></td><td>{{ o.paid_today|usd }}</td><td>{{ o.spent|usd }} / {{ o.monthly_cap_micros|usd }}</td><td>{{ o.model_cost|usd }}</td><td>{{ o.revenue|usd }}</td>
+<td><form method="post" action="/money/deposit" class="flex gap-1"><input type="hidden" name="org_id" value="{{ o.id }}"><input name="amount" size="5" class="border rounded p-1 text-xs" placeholder="$"><button class="text-xs px-2 rounded bg-slate-800 text-white">add</button></form></td></tr>{% endfor %}
+</tbody></table>
+{% endcall %}
+{% call card("Allowlisted payees") %}
+<form method="post" action="/money/payee" class="flex flex-wrap gap-2 items-end text-xs mb-2">
+  <label>Name<br><input name="name" required class="border rounded p-1"></label>
+  <label>Org<br><select name="org_id" class="border rounded p-1"><option value="">all orgs</option>{% for o in orgs %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}</select></label>
+  <label>Max per payment $<br><input name="max_usd" value="0" size="5" class="border rounded p-1"></label>
+  <label>Notes<br><input name="notes" class="border rounded p-1"></label>
+  <button class="px-2 py-1 rounded bg-slate-800 text-white">Add payee</button>
+</form>
+{% for p in payees %}<div class="border-t py-1 flex gap-2 items-center"><b>{{ p.name }}</b><span class="text-xs text-slate-500">{{ p.org_name or 'all orgs' }} · max {{ p.max_per_payment_micros|usd if p.max_per_payment_micros else 'policy' }} · {{ p.notes }}</span><span class="pill {{ 'o-ok' if p.status == 'active' else 'o-refused' }}">{{ p.status }}</span>
+<form method="post" action="/money/payee/{{ p.id }}/toggle"><button class="text-xs underline">{{ 'disable' if p.status == 'active' else 'enable' }}</button></form></div>{% else %}<div class="text-slate-500">No payees yet.</div>{% endfor %}
+{% endcall %}
+{% call card("Ledger (deposits, payments, spend, revenue)") %}
+<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>When</th><th>Org</th><th>Agent</th><th>Kind</th><th>Amount</th><th>Source</th><th>Memo</th></tr></thead><tbody>
+{% for e in entries %}<tr class="border-t text-xs"><td>{{ e.ts|ago }}</td><td>{{ e.org_name }}</td><td>{{ e.agent_name or '' }}</td><td>{{ e.kind }}</td><td>{{ e.amount_micros|usd }}</td><td>{{ e.source }}</td><td>{{ e.memo or '' }}</td></tr>{% endfor %}
+</tbody></table>
+{% endcall %}
+{% endblock %}

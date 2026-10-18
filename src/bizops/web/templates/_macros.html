@@ -1,0 +1,10 @@
+{% macro outcome(o) %}<span class="pill o-{{ o or 'pending' }}">{{ o or 'pending' }}</span>{% endmacro %}
+{% macro pause_btn(target, id, status) %}
+<form method="post" action="/pause" class="inline">
+  <input type="hidden" name="target" value="{{ target }}"><input type="hidden" name="target_id" value="{{ id }}">
+  <input type="hidden" name="paused" value="{{ '0' if status == 'paused' else '1' }}">
+  <button class="text-xs px-2 py-0.5 rounded border {{ 'border-green-600 text-green-700' if status == 'paused' else 'border-red-600 text-red-700' }}">
+    {{ 'resume' if status == 'paused' else 'pause' }}</button>
+</form>
+{% endmacro %}
+{% macro card(title) %}<section class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-4"><h2 class="font-semibold mb-2">{{ title }}</h2>{{ caller() }}</section>{% endmacro %}

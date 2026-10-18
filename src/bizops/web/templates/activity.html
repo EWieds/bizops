@@ -1,0 +1,24 @@
+{% extends "base.html" %}{% from "_macros.html" import card %}
+{% block body %}
+<div class="flex items-center gap-3 mb-3"><h1 class="text-xl font-semibold">Activity log</h1>
+<span class="text-slate-500 text-xs">Every tool call, model call, message, spend and decision. Written before the action runs and after it finishes.</span>
+<form method="post" action="/explain" class="ml-auto"><input type="hidden" name="day" value="today"><button class="text-xs px-2 py-1 rounded bg-slate-800 text-white">Explain today</button></form></div>
+<form id="filters" method="get" action="/activity" class="bg-white border rounded-lg p-3 mb-3 flex flex-wrap gap-2 items-end text-xs">
+  <label>Org<br><select name="org" class="border rounded p-1"><option value="">all</option>{% for o in orgs %}<option value="{{ o.id }}" {{ 'selected' if params.org == o.id }}>{{ o.name }}</option>{% endfor %}</select></label>
+  <label>Agent<br><select name="agent" class="border rounded p-1"><option value="">all</option>{% for a in agents %}<option value="{{ a.id }}" {{ 'selected' if params.agent == a.id }}>{{ a.org }} / {{ a.name }}</option>{% endfor %}</select></label>
+  <label>Action<br><select name="action" class="border rounded p-1"><option value="">all</option>{% for a in actions %}<option {{ 'selected' if params.action == a }}>{{ a }}</option>{% endfor %}</select></label>
+  <label>Outcome<br><select name="outcome" class="border rounded p-1"><option value="">all</option>{% for o in ['ok','refused','error','hard_stop'] %}<option {{ 'selected' if params.outcome == o }}>{{ o }}</option>{% endfor %}</select></label>
+  <label>Min cost $<br><input name="min_cost" value="{{ params.min_cost or '' }}" size="5" class="border rounded p-1"></label>
+  <label>Since (ISO)<br><input name="since" value="{{ params.since or '' }}" size="18" class="border rounded p-1" placeholder="2026-10-18"></label>
+  <label>Search<br><input name="q" value="{{ params.q or '' }}" class="border rounded p-1" placeholder="text in reason, args, result"></label>
+  <label class="flex items-center gap-1"><input type="checkbox" name="hide_model" value="1" {{ 'checked' if params.hide_model == '1' }}> hide model calls</label>
+  {% if params.run %}<input type="hidden" name="run" value="{{ params.run }}">{% endif %}
+  <button class="px-3 py-1 rounded bg-slate-800 text-white">Filter</button><a href="/activity" class="underline">reset</a>
+</form>
+<div class="bg-white border rounded-lg overflow-x-auto">
+<table class="w-full">
+<thead class="text-left text-xs text-slate-500"><tr><th class="p-2">When</th><th>Who</th><th>Did what</th><th>Why</th><th>Outcome</th><th>Cost</th><th>Produced</th><th></th></tr></thead>
+<tbody id="rows" hx-get="/activity/rows?{{ request.query_params }}" hx-trigger="every 5s [!document.querySelector('td[id^=d-] div')]" hx-swap="innerHTML">
+{% include "_activity_rows.html" %}
+</tbody></table></div>
+{% endblock %}

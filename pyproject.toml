@@ -1,0 +1,34 @@
+[project]
+name = "bizops"
+version = "1.0.0a1"
+description = "An umbrella of AI-run businesses: one org engine, everything is data."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "jinja2>=3.1",
+  "pyyaml>=6",
+  "httpx>=0.27",
+  "anthropic>=1.0",
+  "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+bizops = "bizops.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bizops = ["migrations/*.sql", "web/templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

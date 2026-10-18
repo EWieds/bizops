@@ -1,0 +1,10 @@
+{% from "_macros.html" import outcome %}
+<div class="bg-slate-100 rounded p-2 m-1 text-xs">
+{% for e in related %}
+<div class="mb-2"><b>{{ e.phase }}</b> · {{ e.ts }} · {{ outcome(e.outcome) if e.phase != 'before' else '' }} · call {{ e.call_id }} · run {{ e.run_id }}
+{% if e.reason %}<div>why: {{ e.reason }}</div>{% endif %}
+{% if e.args_json %}<div>args:</div><pre>{{ e.args_json|pretty }}</pre>{% endif %}
+{% if e.result_json %}<div>result:</div><pre>{{ e.result_json|pretty }}</pre>{% endif %}</div>
+{% endfor %}
+{% if decision %}<div class="border-t pt-1">policy decision: <b>{{ decision.verdict }}</b> by rule <code>{{ decision.rule }}</code>{% if decision.approver %} · approver {{ decision.approver }} ({{ decision.confidence }}): {{ decision.approver_reason }}{% endif %}</div>{% endif %}
+</div>

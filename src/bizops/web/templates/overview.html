@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% from "_macros.html" import pause_btn, card %}
+{% block body %}
+<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+  {% set m = totals %}
+  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Spend this month</div><div class="text-xl font-semibold">{{ m.month|usd }}</div><div class="text-xs text-slate-500">cap {{ m.monthly_cap|usd }} · ceiling {{ m.ceiling|usd }}</div></div>
+  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Spend today</div><div class="text-xl font-semibold">{{ m.day|usd }}</div><div class="text-xs text-slate-500">daily cap {{ m.daily_cap|usd }}</div></div>
+  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Orgs</div><div class="text-xl font-semibold">{{ orgs|length }}</div></div>
+  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Runs today</div><div class="text-xl font-semibold">{{ m.runs_today }}</div><div class="text-xs text-slate-500">{{ m.running }} running now</div></div>
+  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Needs a human</div><div class="text-xl font-semibold"><a href="/queue" class="underline">{{ open_queue }}</a></div></div>
+</div>
+{% call card("Orgs") %}
+<div class="overflow-x-auto"><table class="w-full">
+<thead class="text-left text-slate-500 text-xs"><tr><th></th><th>Org</th><th>Status</th><th>Agents</th><th>Open / blocked tasks</th><th>Spend (month) / cap</th><th>Verified revenue</th><th>Wallet</th><th>Policy flags</th><th></th></tr></thead>
+<tbody>
+{% for o in orgs %}
+<tr class="border-t">
+  <td title="{{ o.health_reasons|join(', ') }}"><span class="dot dot-{{ o.health }}"></span></td>
+  <td class="py-1"><a class="font-medium underline" href="/orgs/{{ o.id }}">{{ o.name }}</a>{% if not o.parent_org_id %} <span class="pill bg-slate-200">platform</span>{% endif %}<div class="text-xs text-slate-500">{{ o.template }} · {{ o.health_reasons|join(', ') }}</div></td>
+  <td>{{ o.status }}</td><td>{{ o.agents }}</td><td>{{ o.open_tasks }} / {{ o.blocked }}</td>
+  <td>{{ o.spent|usd }} / {{ o.monthly_cap_micros|usd }}
+    <div class="h-1 bg-slate-200 rounded w-24"><div class="h-1 rounded {{ 'bg-red-500' if o.monthly_cap_micros and o.spent > 0.9*o.monthly_cap_micros else 'bg-slate-600' }}" style="width: {{ [100, (100*o.spent/(o.monthly_cap_micros or 1))]|min }}%"></div></div></td>
+  <td>{{ o.revenue|usd }}</td><td>{{ o.wallet|usd }}</td><td>{{ o.flags }}</td>
+  <td class="whitespace-nowrap">{% if o.ceo %}<a class="text-xs underline mr-2" href="/chat?agent={{ o.ceo.id }}">chat CEO</a>{% endif %}{{ pause_btn('org', o.id, o.status) }}</td>
+</tr>
+{% endfor %}
+</tbody></table></div>
+{% endcall %}
+{% call card("Spend per day (all orgs, USD)") %}
+<canvas id="spend" height="70"></canvas>
+<script>
+new Chart(document.getElementById('spend'), {type: 'bar',
+  data: {labels: {{ days|map(attribute='d')|list|tojson }}, datasets: [{label: 'USD', data: {{ days|map(attribute='usd')|list|tojson }}, backgroundColor: '#334155'}]},
+  options: {plugins: {legend: {display: false}}, scales: {y: {beginAtZero: true}}}});
+</script>
+{% endcall %}
+<div class="text-xs text-slate-500">Revenue is shown only from connectors or the owner. Agents cannot write it.</div>
+{% endblock %}

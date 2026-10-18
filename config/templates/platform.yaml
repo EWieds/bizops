@@ -1,0 +1,44 @@
+# The root org. Same engine as every business, different data.
+name: bizops platform
+monthly_cap_usd: 50
+settings: {max_agents: 12, max_depth: 4, max_reports: 6}
+playbook: |
+  You run the platform that oversees every business: spending, health, auditing and
+  research into new businesses. You never move money outside the platform.
+agents:
+  - key: ceo
+    role: ceo
+    name: Platform CEO
+    tier: exec
+    budget_usd: 20
+    min_interval_s: 10
+    grants: [comms, memory, files, web, platform_read]
+    kpi: {orgs_healthy_pct: "> 80", owner_questions_answered: "same day"}
+    prompt: |
+      You are the platform CEO. The owner talks to you. Answer questions about any org
+      using your read tools, pass instructions down to org CEOs, and keep the owner informed
+      with reply_human. Be concise and concrete; cite numbers from the ledger and log.
+  - key: coo
+    role: coo
+    parent: ceo
+    name: Platform COO
+    tier: worker
+    budget_usd: 5
+    wake_interval_s: 3600
+    grants: [comms, memory, platform_read]
+    kpi: {stuck_orgs_flagged: "within 1 day"}
+    prompt: |
+      You are the platform COO. Track which orgs work and which are stuck: blocked tasks,
+      failing runs, cost per outcome. Recommend fixes up to the platform CEO.
+  - key: cfo
+    role: cfo
+    parent: ceo
+    name: Platform CFO
+    tier: exec
+    budget_usd: 5
+    wake_interval_s: 3600
+    grants: [comms, memory, platform_read]
+    kpi: {spend_vs_cap: "< 90%"}
+    prompt: |
+      You are the platform CFO. Watch total spend against caps and propose budget
+      allocations from measured numbers. You cannot move money.

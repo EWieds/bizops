@@ -1,0 +1,23 @@
+{% from "_macros.html" import outcome %}
+{% for r in rows %}
+<tr class="border-t align-top hover:bg-slate-50">
+  <td class="p-2 text-xs whitespace-nowrap" title="{{ r.ts }}">{{ r.ts[5:10] }} {{ r.ts[11:19] }}</td>
+  <td class="text-xs">{% if r.agent_id %}<a class="underline" href="/agents/{{ r.agent_id }}">{{ r.agent_name }}</a><div class="text-slate-500">{{ r.org_name }}</div>{% else %}{{ r.actor_kind }}{% if r.org_name %}<div class="text-slate-500">{{ r.org_name }}</div>{% endif %}{% endif %}</td>
+  <td><code class="text-xs">{{ r.action }}</code>{% if r.args_json and r.kind != 'model' %}<div class="text-xs text-slate-500">{{ r.args_json[:140] }}</div>{% endif %}</td>
+  <td class="text-xs max-w-xs">{{ (r.reason or '')[:200] }}</td>
+  <td>{{ outcome(r.outcome) }}</td>
+  <td class="text-xs whitespace-nowrap">{{ r.cost_micros|usd if r.cost_micros else '' }}</td>
+  <td class="text-xs max-w-sm">
+    {% if r.ref_type == 'artifact' %}<a class="underline" href="/artifacts/{{ r.ref_id }}">file</a>
+    {% elif r.ref_type == 'decision' %}<a class="underline" href="/queue">decision</a>
+    {% elif r.ref_type == 'run' %}<a class="underline" href="/activity?run={{ r.ref_id }}">run</a>
+    {% elif r.ref_type == 'org' %}<a class="underline" href="/orgs/{{ r.ref_id }}">org</a>{% endif %}
+    <span class="text-slate-500">{{ (r.result_json or '')[:160] }}</span>
+  </td>
+  <td class="whitespace-nowrap text-xs">
+    <button class="underline" hx-get="/events/{{ r.id }}" hx-target="#d-{{ r.id }}" hx-swap="innerHTML">details</button>
+    <form method="post" action="/explain" class="inline"><input type="hidden" name="event_id" value="{{ r.id }}"><button class="underline">explain</button></form>
+  </td>
+</tr>
+<tr><td colspan="8" id="d-{{ r.id }}"></td></tr>
+{% else %}<tr><td class="p-3 text-slate-500" colspan="8">No activity matches.</td></tr>{% endfor %}

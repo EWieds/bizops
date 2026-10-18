@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bizops</title>
+<script src="https://cdn.tailwindcss.com/3.4.5"></script>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  .dot{display:inline-block;width:.6rem;height:.6rem;border-radius:9999px}
+  .dot-green{background:#16a34a}.dot-yellow{background:#ca8a04}.dot-red{background:#dc2626}
+  pre{white-space:pre-wrap;word-break:break-word}
+  .pill{font-size:.7rem;padding:.05rem .45rem;border-radius:9999px;font-weight:600}
+  .o-ok{background:#dcfce7;color:#166534}.o-refused{background:#fee2e2;color:#991b1b}
+  .o-error{background:#fde68a;color:#92400e}.o-hard_stop{background:#ede9fe;color:#5b21b6}
+  .o-pending{background:#e0f2fe;color:#075985}
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 text-sm">
+<header class="bg-slate-900 text-slate-100">
+  <div class="max-w-7xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+    <a href="/" class="font-bold text-base mr-2">bizops</a>
+    {% set links = [("/", "Overview"), ("/activity", "Activity"), ("/chat", "Chat"), ("/queue", "Needs a human"), ("/money", "Money"), ("/new", "+ New business")] %}
+    {% for href, label in links %}
+      <a href="{{ href }}" class="{% if nav == href %}text-white underline{% else %}text-slate-300 hover:text-white{% endif %}">{{ label }}{% if href == "/queue" and open_queue %} <span class="pill bg-violet-500 text-white">{{ open_queue }}</span>{% endif %}</a>
+    {% endfor %}
+    <span class="flex-1"></span>
+    {% if dry_run %}<span class="pill bg-amber-400 text-slate-900">DRY RUN · scripted model, simulated costs, sandbox payments</span>{% endif %}
+    <form method="post" action="/pause" class="inline">
+      <input type="hidden" name="target" value="platform">
+      <input type="hidden" name="paused" value="{{ '0' if paused else '1' }}">
+      <button class="px-2 py-1 rounded {{ 'bg-green-600' if paused else 'bg-red-600' }} text-white font-semibold"
+        onclick="return confirm('{{ 'Resume' if paused else 'PAUSE' }} the whole platform?')">
+        {{ 'Resume platform' if paused else 'Kill switch: pause all' }}</button>
+    </form>
+  </div>
+</header>
+{% if paused %}<div class="bg-red-600 text-white text-center py-1 font-semibold">Platform paused. No agent runs, no actions execute.</div>{% endif %}
+<main class="max-w-7xl mx-auto px-4 py-4">
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

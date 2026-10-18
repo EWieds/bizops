@@ -1,0 +1,43 @@
+{% extends "base.html" %}{% from "_macros.html" import pause_btn, card %}
+{% block body %}
+<div class="flex flex-wrap items-center gap-3 mb-3">
+  <h1 class="text-xl font-semibold">{{ agent.name }}</h1>
+  <span class="text-slate-500">{{ agent.role }} in <a class="underline" href="/orgs/{{ org.id }}">{{ org.name }}</a> · {{ agent.status }}</span>
+  {{ pause_btn('agent', agent.id, agent.status) }}
+  <form method="post" action="/agents/{{ agent.id }}/wake" class="inline"><button class="text-xs px-2 py-0.5 rounded border">wake now</button></form>
+  {% if agent.depth == 0 %}<a class="underline text-xs" href="/chat?agent={{ agent.id }}">chat</a>{% endif %}
+  <a class="underline text-xs" href="/activity?agent={{ agent.id }}">activity</a>
+</div>
+<div class="grid md:grid-cols-3 gap-4">
+<div class="md:col-span-2">
+{% call card("Inbox") %}
+{% for m in inbox %}<div class="border-t py-1"><span class="pill o-pending">{{ m.type }}</span> <b>{{ 'owner' if m.sender_kind == 'human' else m.sender_name }}</b> <span class="text-xs text-slate-500">{{ m.created_at|ago }} · hop {{ m.hop }} · {{ m.status }}</span><div class="whitespace-pre-wrap">{{ m.body[:1500] }}</div></div>{% else %}<div class="text-slate-500">Empty.</div>{% endfor %}
+{% endcall %}
+{% call card("Sent") %}
+{% for m in sent %}<div class="border-t py-1"><span class="pill o-pending">{{ m.type }}</span> to <b>{{ 'owner' if m.recipient_kind == 'human' else m.recipient_name }}</b> <span class="text-xs text-slate-500">{{ m.created_at|ago }}</span><div class="whitespace-pre-wrap">{{ m.body[:800] }}</div></div>{% else %}<div class="text-slate-500">Nothing sent.</div>{% endfor %}
+{% endcall %}
+{% call card("Runs") %}
+<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Started</th><th>Why</th><th>Status</th><th>Turns</th><th>Tokens</th><th>Cost</th><th>Summary</th></tr></thead><tbody>
+{% for r in runs %}<tr class="border-t align-top"><td class="text-xs whitespace-nowrap"><a class="underline" href="/activity?run={{ r.id }}">{{ r.started_at|ago }}</a></td><td>{{ r.wake_reason }}</td><td>{{ r.status }}</td><td>{{ r.turns }}</td><td class="text-xs">{{ r.input_tokens }} / {{ r.output_tokens }}</td><td>{{ r.cost_micros|usd }}</td><td class="text-xs">{{ (r.summary or r.error or '')[:200] }}</td></tr>{% endfor %}
+</tbody></table>
+{% endcall %}
+</div>
+<div>
+{% call card("Profile") %}
+<div>Model tier: <b>{{ agent.model_tier }}</b>{% if agent.model_override %} ({{ agent.model_override }}){% endif %}</div>
+<div>Budget: {{ spent|usd }} / {{ agent.budget_micros|usd }} this month</div>
+<div>Grants: {{ grants|join(', ') }}</div>
+<div>KPIs: <code class="text-xs">{{ kpi|tojson }}</code></div>
+<div>Wake: {{ 'every %ss'|format(agent.wake_interval_s) if agent.wake_interval_s else 'on events' }} · min interval {{ agent.min_interval_s }}s</div>
+<div>Supervisor: {% if sup %}<a class="underline" href="/agents/{{ sup.id }}">{{ sup.name }}</a>{% else %}owner{% endif %}</div>
+<div>Reports: {% for r in reports %}<a class="underline" href="/agents/{{ r.id }}">{{ r.name }}</a>{{ ', ' if not loop.last }}{% else %}none{% endfor %}</div>
+<details class="mt-2"><summary>System prompt</summary><pre class="text-xs">{{ agent.system_prompt }}</pre></details>
+{% endcall %}
+{% call card("Tasks") %}
+{% for t in tasks %}<div class="border-t py-1">{{ t.title }} <span class="pill {{ 'o-hard_stop' if t.status == 'blocked' else 'o-ok' if t.status == 'done' else 'o-pending' }}">{{ t.status }}</span></div>{% else %}<div class="text-slate-500">None.</div>{% endfor %}
+{% endcall %}
+{% call card("Memory") %}
+{% for n in notes %}<details><summary>{{ n.key }} <span class="text-xs text-slate-500">{{ n.updated_at|ago }}</span></summary><pre class="text-xs">{{ n.body }}</pre></details>{% else %}<div class="text-slate-500">No notes.</div>{% endfor %}
+{% endcall %}
+</div></div>
+{% endblock %}

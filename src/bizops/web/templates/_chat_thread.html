@@ -1,0 +1,9 @@
+{% for m in messages %}
+<div class="my-2 flex {{ 'justify-end' if m.sender_kind == 'human' }}">
+  <div class="max-w-[80%] rounded-lg px-3 py-2 {{ 'bg-slate-800 text-white' if m.sender_kind == 'human' else 'bg-slate-100' }}">
+    <div class="whitespace-pre-wrap">{{ m.body }}</div>
+    <div class="text-[10px] opacity-60 mt-1">{{ m.type }} · {{ m.created_at|ago }}{% if m.sender_kind == 'human' %} · {{ m.status }}{% endif %}</div>
+  </div>
+</div>
+{% else %}<div class="text-slate-500">No messages yet. Say hello.</div>{% endfor %}
+{% if busy %}<div class="text-xs text-slate-500 italic">working on it...</div>{% endif %}
