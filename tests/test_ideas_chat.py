@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from conftest import with_csrf
 from bizops import ideas, media
 from bizops.engine import org_ceo
+from bizops.llm.dry_run import DEMO_CASE
 from bizops.gateway import invoke
 from bizops.tools import Ctx
 from bizops.web.app import create_app
@@ -14,7 +15,23 @@ PROPOSAL = {"title": "Review Reply Service", "summary": "We answer Google review
             "thesis": "Owners don't have time to reply to reviews", "target_customer": "Local restaurants",
             "offer": "$99/month", "evidence": [{"claim": "Replies improve ratings", "source_url": "https://example.com/study"}],
             "plan": "Week 1 build; weeks 2-4 outreach", "kill_criteria": "No customer by day 45",
-            "scores": {k: 4 for k in ideas.SCORE_WEIGHTS}, "template": "generic"}
+            "scores": {k: 4 for k in ideas.SCORE_WEIGHTS}, "template": "generic", "business_case": DEMO_CASE}
+
+
+def red_team(core, pid, verdict="go", **over):
+    """A complete, valid red-team review (tests that need one but aren't about the review itself)."""
+    rt = core.db.one("SELECT * FROM agents WHERE role = 'red_team'")
+    review = {"verdict": verdict, "summary": "Paid demand is real but replies will be lower than planned.",
+              "fatal_flaws": [] if verdict != "no_go" else ["no proof anyone pays"],
+              "required_changes": ["cut the reply-rate assumption to 2%"] if verdict == "fix" else [],
+              "risks": [{"risk": f"risk {i}", "likelihood": "medium", "impact": "high", "mitigation": "m"} for i in range(5)],
+              "counter_evidence": [{"claim": "cheaper rivals", "source_url": "https://example.com/a"},
+                                   {"claim": "complaints", "source_url": "https://example.com/b"}],
+              "assumption_challenges": [{"assumption": f"a{i}", "challenge": "too rosy", "revised_value": "lower"} for i in range(3)],
+              "revised_scores": {k: 4 for k in ideas.SCORE_WEIGHTS},
+              "revised_projection": {"time_to_first_revenue_days": 30, "month3_profit_usd": 100, "month6_profit_usd": 600},
+              "kill_criteria": "No paying customer by day 45.", **over}
+    return ideas.record_red_team(core.db, core.settings, reviewer=rt, proposal_id=pid, review=review)
 
 
 def analyst(core):
@@ -25,9 +42,14 @@ async def test_submit_scores_and_notifies_ceo(core, org):
     r = await invoke(Ctx(core=core, agent=analyst(core)), "submit_proposal", PROPOSAL)
     assert r.ok, r.content
     p = core.db.one("SELECT * FROM proposals")
-    assert p["total_score"] == 4.0 and p["status"] == "new"
-    msg = core.db.one("SELECT body FROM messages WHERE recipient_id = ? AND body LIKE 'New proposal%'", (org["pceo"]["id"],))
-    assert "Standing authorization" in msg["body"]
+    assert p["total_score"] == 4.0 and p["status"] == "red_team"
+    assert core.db.one("SELECT 1 AS x FROM tasks t JOIN agents a ON a.id = t.assignee_id WHERE a.role = 'red_team' "
+                       "AND t.title LIKE ?", (f"Red-team {p['id']}%",))
+    assert not core.db.one("SELECT 1 AS x FROM messages WHERE recipient_id = ? AND body LIKE 'Reviewed proposal%'",
+                           (org["pceo"]["id"],))  # nothing to decide before the red team has spoken
+    red_team(core, p["id"])
+    msg = core.db.one("SELECT body FROM messages WHERE recipient_id = ? AND body LIKE 'Reviewed proposal%'", (org["pceo"]["id"],))
+    assert "Standing authorization" in msg["body"] and "verdict go" in msg["body"]
     bad = {**PROPOSAL, "evidence": []}
     r = await invoke(Ctx(core=core, agent=analyst(core)), "submit_proposal", bad)
     assert not r.ok and "evidence" in r.content
@@ -39,6 +61,7 @@ async def test_ceo_launches_within_venture_limits(core, org):
     ids = []
     for i in range(3):
         ids.append(ideas.submit_proposal(core.db, core.settings, author=analyst(core), fields={**PROPOSAL, "title": f"Idea {i}"})["id"])
+        red_team(core, ids[-1])
     for pid in ids[:2]:
         r = await invoke(c, "decide_proposal", {"proposal_id": pid, "decision": "approve", "reason": "strong"})
         assert r.ok, r.content
@@ -68,6 +91,7 @@ async def test_dry_run_research_to_launch(core, org):
     await Scheduler(core, tick_s=0.05).drain(timeout=60)
     p = core.db.one("SELECT * FROM proposals")
     assert p and p["status"] == "launched" and p["org_id"]
+    assert p["redteam_verdict"] == "go" and p["redteam_by"] != p["created_by"]
 
 
 def test_extract_text_pdf_and_docx():
@@ -116,9 +140,13 @@ def test_owner_launch_from_ideas_page(core, org):
     p = ideas.submit_proposal(core.db, core.settings, author=None, fields=PROPOSAL)
     with TestClient(create_app(core, run_scheduler=False)) as c:
         with_csrf(c)
-        r = c.post(f"/ideas/{p['id']}/launch", follow_redirects=False)
+        assert c.post(f"/ideas/{p['id']}/launch", follow_redirects=False).status_code == 400  # red team first
+        red_team(core, p["id"], verdict="no_go")
+        assert "red team: no-go" in c.get("/ideas").text
+        r = c.post(f"/ideas/{p['id']}/launch", follow_redirects=False)  # the owner may overrule it
         assert r.status_code == 303 and r.headers["location"].startswith("/orgs/")
         assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (p["id"],)) == "launched"
+        assert "owner override" in core.db.scalar("SELECT decision_reason FROM proposals WHERE id = ?", (p["id"],))
 
 
 def test_duplicate_proposals_refused(core, org):

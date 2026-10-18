@@ -68,7 +68,9 @@ Open your dashboard address, log in, click **Connect accounts**, and press **Tes
 Pick one:
 - **Let it find one:** go to **Ideas** -> **Research new ideas now**. Proposals appear within the hour.
   Strong ones are launched automatically (you'll get a chat message), or press **Launch now** yourself.
-- **Give it your idea:** go to **Chat** -> Platform CEO -> type your idea -> press **Launch as a business**.
+- **Give it your idea:** **New business** (or Chat -> Platform CEO -> **Launch as a business**). The analyst writes
+  the full business case and an independent red team attacks it, hardest of all because it's yours. You get
+  the verdict and the main objections in chat; if it says no, you can still launch it from **Ideas**.
 - **From a video or document:** in **Chat**, paste a YouTube link or attach a PDF/Word file, then press
   **Business plan**, **Build a website** or **Launch as a business**.
 

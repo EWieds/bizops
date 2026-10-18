@@ -84,13 +84,15 @@ def test_money_forms(core, seeded, client):
 
 
 def test_new_business(core, seeded, client):
-    r = client.post("/new", data={"name": "Gutter Leads", "template": "generic", "brief": "gutters in Ohio", "cap": "50"},
+    """The owner's idea becomes an analyst task -> proposal -> red team; nothing is created directly."""
+    r = client.post("/new", data={"name": "Gutter Leads", "template": "generic", "brief": "gutters in Ohio", "cap": "50"})
+    assert "Describe the idea" in r.text  # too thin to work with
+    r = client.post("/new", data={"name": "Gutter Leads", "template": "generic", "cap": "50",
+                                  "brief": "Gutter cleaning lead generation sites in Ohio, rented to contractors."},
                     follow_redirects=False)
     assert r.status_code == 303
-    org = core.db.one("SELECT * FROM orgs WHERE name = 'Gutter Leads'")
-    assert org and org["brief"] == "gutters in Ohio"
-    r = client.post("/new", data={"name": "Too Big", "template": "generic", "cap": "5000"})
-    assert "exceed" in r.text or "ceiling" in r.text
+    assert not core.db.one("SELECT 1 AS x FROM orgs WHERE name = 'Gutter Leads'")
+    assert core.db.one("SELECT 1 AS x FROM tasks WHERE title = 'Owner idea: Gutter Leads'")
 
 
 def test_explain_routes_to_platform_ceo(core, seeded, client):

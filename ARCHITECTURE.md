@@ -110,8 +110,22 @@ per-business daily ceiling are checked BEFORE the model call.
 ## Ideas pipeline (ideas.py, tools/ideas.py)
 maintenance runs research_cycle every venture.research_every_days: it tasks the venture analyst, who
 submits proposals (submit_proposal: weighted 1-5 scores, sourced evidence, plan, kill criteria; duplicates
-refused). The platform CEO gets each one and, under the standing authorization (venture.auto_launch), launches
-strong ones with decide_proposal inside the venture budget. The owner can launch any proposal from /ideas.
+refused) with a full business case: price + model + sourced competitor prices, exactly who the first 10
+customers are and how we reach them, channels with cost and conversion, positioning, startup and monthly
+costs, CAC / margin / LTV, days to first revenue, monthly projections, assumptions, pre-mortem.
+`ideas.validate_case` recomputes the arithmetic (profit, cumulative profit, break-even) and flags optimism
+(revenue > customers x price, LTV/CAC < 3, CAC $0, margin < 50%, slow first sale, hockey sticks, burn vs
+budget). Every proposal then goes to the independent red team (role red_team: no parent, like the auditor;
+can't write proposals or review its own). Its review must be thorough (enforced: risks with likelihood and
+impact, sourced counter-evidence, 3+ challenged assumptions, its own scores on every criterion, its own
+conservative projection); owner ideas need more (5 risks, 2 counter-evidence) and the brief says no
+deference. Verdict: go -> 'new' (decidable), fix -> back to the author (revise_proposal, max
+venture.red_team_max_rounds), no_go -> parked. Only then is the platform CEO told. Agents launch only a 'go'
+with a red-team score >= auto_launch_min_score and positive red-team month-6 profit, inside the venture
+budget; the owner can overrule from /ideas (recorded as an override). Owner ideas (/new, chat "launch")
+go through the analyst and red team like everything else; there is no direct create-business path. On
+launch the brief carries the business case and red-team review, and two measured goals are seeded (first
+paying customer by the red team's timeline; revenue on plan for 60 days).
 
 ## Chat and media (web/app.py chat_post, media.py)
 Owner messages can carry files (PDF/DOCX/text/CSV: original + extracted text saved as artifacts) and

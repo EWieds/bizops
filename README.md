@@ -37,8 +37,9 @@ waits in your Needs-you queue.
 ## Using it day to day
 
 - **Ideas** page: the venture analyst researches on its own every 3 days and submits scored proposals
-  (evidence with sources, customer, offer, 60-day plan, kill criteria). The platform CEO launches strong ones
-  within your venture limits, or you press Launch now / Park / Reject.
+  with a full business case (price, how to get the first customers, marketing, costs, projected profit, time
+  to first money). An independent red team attacks every proposal, yours hardest, before anything launches.
+  The platform CEO launches only what survives, within your venture limits; you can still Launch / Park / Reject.
 - **Chat**: talk to the platform CEO, any business CEO or the auditor. Attach PDFs, Word docs, text or CSV,
   or paste YouTube links (transcripts are pulled automatically), then press **Business plan**,
   **Build a website** or **Launch as a business**. Replies arrive in the thread with links to the files

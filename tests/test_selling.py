@@ -203,17 +203,7 @@ async def test_vapi_upsert(settings, monkeypatch):
     assert seen[1][0] == "PATCH" and seen[1][1] == "/assistant/asst_1"
 
 
-async def test_create_business_venture_limits(core, org):
-    c = Ctx(core=core, agent=org["pceo"])
-    brief = "x" * 250
-    r = await invoke(c, "create_business", {"name": "V1", "template": "generic", "brief": "too short"})
-    assert not r.ok and "brief" in r.content
-    r = await invoke(c, "create_business", {"name": "V1", "template": "nope", "brief": brief})
+async def test_no_launch_bypass(core, org):
+    """Businesses launch only from red-teamed proposals: there is no direct create tool."""
+    r = await invoke(Ctx(core=core, agent=org["pceo"]), "create_business", {"name": "V1", "template": "generic", "brief": "x" * 250})
     assert not r.ok
-    core.settings.policy["platform"]["monthly_cap_usd"] = 1000
-    assert (await invoke(c, "create_business", {"name": "V1", "template": "generic", "brief": brief})).ok
-    assert (await invoke(c, "create_business", {"name": "V2", "template": "generic", "brief": brief})).ok
-    r = await invoke(c, "create_business", {"name": "V3", "template": "generic", "brief": brief})
-    assert not r.ok and "venture" in r.content
-    r = await invoke(Ctx(core=core, agent=org["ceo"]), "create_business", {"name": "V4", "template": "generic", "brief": brief})
-    assert not r.ok and "grant" in r.content

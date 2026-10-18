@@ -404,8 +404,9 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         "website": ("Build a professional website for this idea and publish it: clear headline, the customer's problem, "
                     "the offer with pricing, how it works, proof or credibility, FAQ, and one clear call to action. "
                     "Mobile friendly. Send me the link."),
-        "launch": ("Turn this into a full proposal (scored, with sourced evidence and kill criteria). If it's strong, "
-                   "launch it as a business on trial and tell me what you decided."),
+        "launch": ("Turn this into a full proposal with a complete business case (pricing, first customers, marketing, "
+                   "costs, projections) via the analyst. It goes through the red team; launch it only if it survives, "
+                   "and tell me the verdict and the red team's main objections either way."),
         "summary": "Summarize the key business ideas in this, with what's useful for us and what's not.",
     }
 
@@ -634,24 +635,21 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         return page(request, "new.html", templates=[t for t in settings.template_names() if t != "platform"], error=None)
 
     @app.post("/new")
-    async def new_business_post(request: Request, name: str = Form(...), template: str = Form("generic"),
+    async def new_business_post(request: Request, name: str = Form(""), template: str = Form(""),
                                 brief: str = Form(""), cap: float = Form(50)):
-        root = root_org(db)
-        pceo = org_ceo(db, root["id"]) if root else None
-        try:
-            org_id = create_org_from_template(db, settings, template=template, name=name, brief=brief,
-                                              parent_org_id=root["id"] if root else None,
-                                              supervisor_agent_id=pceo["id"] if pceo else None,
-                                              created_by="human", monthly_cap_usd=cap)
-        except (PolicyRefusal, ValueError) as e:
+        """An owner idea becomes a proposal like any other: the analyst writes the business case, the red team
+        attacks it, and only then is it launched (or not, with the reasons)."""
+        from ..ideas import owner_idea
+        if len(brief.strip()) < 20:
             return page(request, "new.html", templates=[t for t in settings.template_names() if t != "platform"],
-                        error=str(e))
-        ceo = org_ceo(db, org_id)
-        if ceo and brief.strip():
-            human_message(db, settings, ceo["id"], f"Here's my brain-dump for this business:\n\n{brief.strip()}",
-                          type="instruction")
-            scheduler.poke()
-        return RedirectResponse(f"/orgs/{org_id}", status_code=303)
+                        error="Describe the idea in a few sentences: what it is, who pays, why now.")
+        task = owner_idea(db, settings, idea=brief, name=name.strip(), template=template, budget_usd=cap)
+        if not task:
+            return page(request, "new.html", templates=[t for t in settings.template_names() if t != "platform"],
+                        error="No venture analyst is available to take the idea.")
+        log_event(db, actor_kind="human", kind="human", action="owner_idea", args={"name": name, "task": task["id"]}, outcome="ok")
+        scheduler.poke()
+        return RedirectResponse("/ideas?submitted=1", status_code=303)
 
     @app.get("/artifacts/{aid}")
     async def artifact(aid: str):
@@ -671,11 +669,16 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
     async def ideas_page(request: Request):
         from ..ideas import SCORE_WEIGHTS
         rows = db.all("SELECT p.*, o.name AS org_name FROM proposals p LEFT JOIN orgs o ON o.id = p.org_id "
-                      "ORDER BY CASE p.status WHEN 'new' THEN 0 WHEN 'parked' THEN 1 WHEN 'launched' THEN 2 ELSE 3 END, "
-                      "p.total_score DESC, p.created_at DESC LIMIT 100")
+                      "ORDER BY CASE p.status WHEN 'new' THEN 0 WHEN 'red_team' THEN 1 WHEN 'revising' THEN 1 WHEN 'parked' THEN 2 "
+                      "WHEN 'launched' THEN 3 ELSE 4 END, COALESCE(p.redteam_score, p.total_score) DESC, p.created_at DESC LIMIT 100")
+        from ..ideas import case_text
         for r in rows:
             r["scores"] = loads(r["scores_json"], {})
             r["evidence"] = loads(r["evidence_json"], [])
+            r["case"] = loads(r["business_case_json"], {})
+            r["case_text"] = case_text(r["case"]) if r["case"] else ""
+            r["checks"] = loads(r["checks_json"], [])
+            r["rt"] = loads(r["redteam_json"], None)
         root = root_org(db)
         analyst = db.one("SELECT * FROM agents WHERE role = 'venture_analyst' AND status = 'active' ORDER BY created_at LIMIT 1")
         return page(request, "ideas.html", proposals=rows, weights=SCORE_WEIGHTS, analyst=analyst,

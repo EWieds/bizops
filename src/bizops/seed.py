@@ -14,8 +14,22 @@ monthly fee. Keep spend tiny until we see real leads."""
 def ensure_platform(core: Core) -> str:
     root = root_org(core.db)
     if root:
+        ensure_red_team(core.db, core.settings, root["id"])
         return root["id"]
     return create_org_from_template(core.db, core.settings, template="platform", created_by="system")
+
+
+def ensure_red_team(db, settings, root_id: str) -> None:
+    """Platforms created before the red team existed get one (independent: no parent, like the auditor)."""
+    if db.one("SELECT 1 AS x FROM agents WHERE org_id = ? AND role = 'red_team' AND status != 'retired'", (root_id,)):
+        return
+    from .db import insert
+    from .engine import agent_row
+    from .util import iso
+    spec = next(a for a in settings.template("platform")["agents"] if a["role"] == "red_team")
+    with db.tx() as conn:
+        insert(conn, "agents", agent_row(settings, spec=spec, org_id=root_id, parent_id=None, depth=0,
+                                         created_by="system", ts=iso()))
 
 
 OWNER_ASK = ("Find a new business we can run with AI agents that can make real money fast, and launch it. "

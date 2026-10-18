@@ -3,12 +3,12 @@
 {% call card("New business") %}
 {% if error %}<div class="bg-red-100 text-red-800 p-2 rounded mb-2">{{ error }}</div>{% endif %}
 <form method="post" action="/new" class="grid gap-2 max-w-2xl">
-  <label>Name<br><input name="name" required class="border rounded p-2 w-full" placeholder="Columbus Gutter Leads"></label>
-  <label>Template<br><select name="template" class="border rounded p-2">{% for t in templates %}<option>{{ t }}</option>{% endfor %}</select></label>
-  <label>Monthly cap (USD)<br><input name="cap" value="50" class="border rounded p-2 w-32"></label>
-  <label>Brain-dump for the CEO<br><textarea name="brief" rows="10" class="border rounded p-2 w-full" placeholder="What is it, who pays, how do you want it run, what's off-limits..."></textarea></label>
-  <button class="px-4 py-2 rounded bg-slate-800 text-white w-48">Create and brief the CEO</button>
+  <label>Working name (optional)<br><input name="name" class="border rounded p-2 w-full" placeholder="Columbus Gutter Leads"></label>
+  <label>Template (optional)<br><select name="template" class="border rounded p-2"><option value="">let the analyst pick</option>{% for t in templates %}<option>{{ t }}</option>{% endfor %}</select></label>
+  <label>Starting budget per month (USD)<br><input name="cap" value="50" class="border rounded p-2 w-32"></label>
+  <label>Your idea<br><textarea name="brief" rows="10" required class="border rounded p-2 w-full" placeholder="What is it, who pays, how do you want it run, what's off-limits..."></textarea></label>
+  <button class="px-4 py-2 rounded bg-slate-800 text-white w-48">Submit idea</button>
 </form>
-<p class="text-xs text-slate-500 mt-2">The org is created from the template, inside the platform cap. The CEO gets your brief and starts designing the plan.</p>
+<p class="text-xs text-slate-500 mt-2">The venture analyst turns your idea into a full business case (pricing, first customers, marketing, costs, projected profit, time to first money). An independent red team then attacks it, hardest of all because it's yours. If it survives, it launches; if not, you get the reasons and can still launch it yourself from Ideas.</p>
 {% endcall %}
 {% endblock %}
