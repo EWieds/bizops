@@ -34,6 +34,7 @@ hard_stops:
   new_payee: "Adding a payee to the allowlist"
   connect_email: "Connecting the email account agents send from (one time)"
   connect_billing: "Connecting the umbrella Stripe account (one time)"
+  billing_dispute: "Responding to a chargeback in Stripe (agents never contact a customer who disputed)"
 
 # Per-agent per-hour rate limits by tool name. '*' is the default for unlisted tools.
 rate_limits:
@@ -91,6 +92,25 @@ sales:
   price_max_usd: 2000               # offers above this need the owner (hard stop: raise_cap)
   revenue_holdback_days: 30         # revenue counts as cleared (allocatable) after refunds/chargebacks window
   b2b_only: true                    # outreach only to businesses, with a public source for the contact
+
+# Capital allocation (reinvestment). Only verified profit (cleared revenue net of refunds and chargebacks,
+# minus all spend) is allocatable. Waterfall: tax reserve -> operating reserve -> surplus split by two keys
+# (CEO proposes, CFO approves; disagreements go to the platform CEO). Enforced in capital.py.
+capital:
+  tax_reserve_pct: 25             # placeholder rate; set the real one with your accountant (not tax advice)
+  operating_reserve_months: 2     # each org keeps this many months of its own costs before surplus moves
+  min_reinvest_self_pct: 50       # unless both keys write down a reason
+  max_treasury_share_pct: 40      # no org receives more than this share of a month's treasury
+  max_cap_increase_pct: 25        # an org's cap rises at most this much per month
+  treasury_floor_usd: 100         # never spent
+  outcome_review_days: 60         # then the keys score the decision against what actually happened
+
+# Public pages anyone can use (no login). Model spend there is checked against the business's budget
+# BEFORE each call, plus this daily ceiling per business; visitors are rate limited by real client IP.
+public:
+  demo_daily_max_usd: 2.0
+  demo_per_ip_per_hour: 30
+  demo_per_agent_per_hour: 200
 
 # Sandbox market (only used while email or billing is not connected to a real provider).
 sandbox:

@@ -10,7 +10,7 @@
 ceo:
   title: Chief Executive Officer
   tier: exec
-  grants: [comms, memory, files, web, money, goals, hire, crm, sales, site]
+  grants: [comms, memory, files, web, money, goals, hire, crm, sales, site, capital]
   heartbeat_s: 14400
   prompt: |
     You are the Chief Executive Officer: a seasoned operator and expert in business management and
@@ -50,7 +50,7 @@ coo:
 cfo:
   title: Chief Financial Officer & Investment Strategist
   tier: exec
-  grants: [comms, memory, files, web, goals]
+  grants: [comms, memory, files, web, goals, capital]
   heartbeat_s: 43200
   prompt: |
     You are the Chief Financial Officer and the company's investment strategist: an expert in smart
@@ -169,7 +169,7 @@ sales:
 platform_ceo:
   title: Platform CEO (Holding Company)
   tier: exec
-  grants: [comms, memory, files, web, goals, hire, platform_read, venture, ideas, site, media]
+  grants: [comms, memory, files, web, goals, hire, platform_read, venture, ideas, site, media, capital]
   heartbeat_s: 21600
   prompt: |
     You are the CEO of a holding company that owns a portfolio of small AI-run businesses: an expert in
@@ -203,7 +203,7 @@ platform_coo:
 platform_cfo:
   title: Chief Investment Officer
   tier: worker
-  grants: [comms, memory, platform_read, goals, web]
+  grants: [comms, memory, platform_read, goals, web, capital]
   heartbeat_s: 43200
   prompt: |
     You are the Chief Investment Officer of the holding company: an expert in smart investing and
@@ -220,7 +220,7 @@ platform_cfo:
 auditor:
   title: Outside Auditor
   tier: exec
-  grants: [comms, memory, files, platform_read, audit]
+  grants: [comms, memory, files, platform_read, audit, capital]
   heartbeat_s: 43200
   prompt: |
     You are an independent outside auditor with a forensic accounting background. You report to the

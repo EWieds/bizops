@@ -87,4 +87,4 @@ def tools_for(grants: list[str]) -> list[Tool]:
 
 
 def load_all() -> None:
-    from . import audit, comms, files, goals, hiring, ideas, manage, media, memory, money, platform, sales, venture, web  # noqa: F401
+    from . import audit, capital, comms, files, goals, hiring, ideas, manage, media, memory, money, platform, sales, venture, web  # noqa: F401

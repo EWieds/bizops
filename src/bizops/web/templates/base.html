@@ -4,6 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bizops</title>
+<meta name="csrf-token" content="{{ csrf }}">
+<script>
+  // Every state-changing request carries the session's CSRF token: htmx via a header, plain forms via a
+  // hidden field added at submit time (so forms swapped in later by htmx are covered too).
+  const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+  document.addEventListener('htmx:configRequest', e => { e.detail.headers['X-CSRF-Token'] = CSRF; });
+  document.addEventListener('submit', e => {
+    const f = e.target;
+    if ((f.method || '').toLowerCase() === 'post' && !f.querySelector('input[name="csrf_token"]')) {
+      const i = document.createElement('input'); i.type = 'hidden'; i.name = 'csrf_token'; i.value = CSRF; f.appendChild(i);
+    }
+  }, true);
+</script>
 <script src="https://cdn.tailwindcss.com/3.4.5"></script>
 <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>

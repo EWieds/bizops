@@ -3,6 +3,7 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import with_csrf
 from bizops import ideas, media
 from bizops.engine import org_ceo
 from bizops.gateway import invoke
@@ -96,6 +97,7 @@ def test_chat_upload_youtube_and_quick_action(core, org, monkeypatch):
     monkeypatch.setattr(media, "_transcript_sync", lambda vid, langs: [{"text": "How I built an agency", "start": 0.0}])
     pceo = org["pceo"]
     with TestClient(create_app(core, run_scheduler=False)) as c:
+        with_csrf(c)
         r = c.post("/chat", data={"agent": pceo["id"], "text": "Look at https://youtu.be/dQw4w9WgXcQ", "action": "plan"},
                    files=[("files", ("notes.txt", b"Idea: sell review replies to restaurants", "text/plain"))],
                    follow_redirects=False)
@@ -113,6 +115,7 @@ def test_owner_launch_from_ideas_page(core, org):
     core.settings.policy["platform"]["monthly_cap_usd"] = 1000
     p = ideas.submit_proposal(core.db, core.settings, author=None, fields=PROPOSAL)
     with TestClient(create_app(core, run_scheduler=False)) as c:
+        with_csrf(c)
         r = c.post(f"/ideas/{p['id']}/launch", follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"].startswith("/orgs/")
         assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (p["id"],)) == "launched"

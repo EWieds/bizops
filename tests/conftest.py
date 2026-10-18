@@ -11,6 +11,7 @@ def clean_env():
     """write_env() also sets os.environ; keep tests independent."""
     import os
     before = dict(os.environ)
+    os.environ["BIZOPS_SECRET"] = "test-secret-0123456789abcdef0123456789abcdef"
     yield
     os.environ.clear()
     os.environ.update(before)
@@ -44,3 +45,12 @@ def org(core):
     fast(core)
     agents = {a["role"]: a for a in core.db.all("SELECT * FROM agents WHERE org_id = ?", (oid,))}
     return {"root": root, "org": oid, "pceo": pceo, **agents}
+
+
+def with_csrf(client):
+    """Make a dashboard test client send the CSRF token like the browser page does."""
+    import re
+    page = client.get("/system")
+    m = re.search(r'name="csrf-token" content="([^"]*)"', page.text)
+    client.headers["X-CSRF-Token"] = m.group(1) if m else ""
+    return client

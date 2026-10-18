@@ -81,7 +81,7 @@ def register_connect(app: FastAPI, core, page) -> None:
         if group == "password":
             if len(form.get("password", "")) < 10:
                 return RedirectResponse("/connect?err=Use+at+least+10+characters", status_code=303)
-            set_password(env_path, form["password"])
+            set_password(env_path, form["password"], db=core.db)  # logs out every session
             return RedirectResponse("/connect?msg=Password+saved", status_code=303)
         keys = FIELDS.get(group)
         if not keys:

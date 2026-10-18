@@ -165,7 +165,7 @@ async def test_stripe_offer_labels_and_payment_polling(core, sales_org, monkeypa
         if req.url.path == "/v1/payment_links":
             return httpx.Response(200, json={"id": "plink_1", "url": "https://buy.stripe.com/test_1"})
         if req.url.path == "/v1/events":
-            return httpx.Response(200, json={"data": [{"id": "evt_2", "data": {"object": {
+            return httpx.Response(200, json={"data": [{"id": "evt_2", "type": "checkout.session.completed", "data": {"object": {
                 "id": "cs_1", "payment_status": "paid", "amount_total": 14900, "currency": "usd", "payment_link": "plink_1",
                 "client_reference_id": sales_org["lead"]["id"], "customer_details": {"email": "owner@acmeplumbing.com"}}}}]})
         return httpx.Response(404)

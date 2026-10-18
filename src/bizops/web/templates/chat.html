@@ -25,7 +25,7 @@
       <button name="action" value="" class="px-4 py-1.5 rounded-md bg-slate-900 text-white">Send</button>
     </div>
   </form>
-  <script>document.getElementById('chattext').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('chatform').submit();}});
+  <script>document.getElementById('chattext').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('chatform').requestSubmit();}});
   var t=document.getElementById('thread');t.scrollTop=t.scrollHeight;</script>
   {% else %}<div class="p-4 text-slate-500">No one to talk to yet.</div>{% endif %}
 </section></div>

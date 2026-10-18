@@ -20,31 +20,30 @@ These are tied to your identity by law; agents can't create them for you.
    2. Allow **Write** on Products, Prices and Payment Links.
    3. Allow **Read** on Checkout Sessions and Events.
    4. Copy the key (starts with `rk_live_`).
-6. **Optional:**
+6. **Anthropic API key** (console.anthropic.com -> API keys): how the always-on server reaches Claude.
+   Set a monthly spend limit there too. (Running a subscription login on a 24/7 server may be against
+   Anthropic's terms, so the deploy script asks for an API key.)
+7. **Optional:**
    - **Jev / TypeSafe key** (typesafe.ai): cheaper, faster decisions.
-   - **Anthropic API key** (console.anthropic.com): no usage-limit pauses.
    - **Vapi key** (vapi.ai): only if a business sells real phone agents.
 
-## Part 2: Install two things on your computer
+## Part 2: Get the code
 
-1. **Node.js**: https://nodejs.org -> download the LTS version -> run the installer.
-2. **Claude Code**: open Terminal (Mac: Cmd+Space, type "Terminal") and run:
-   ```
-   npm install -g @anthropic-ai/claude-code
-   claude
-   ```
-   Log in with your Claude account in the browser window, then type `/exit`.
+Open Terminal (Mac: Cmd+Space, type "Terminal") and run:
+```
+git clone https://github.com/EWieds/bizops.git
+```
+(The deploy script installs the Fly.io command-line tool itself if it's missing.)
 
 ## Part 3: Put bizops on the internet (~10 minutes)
 
 In Terminal:
 ```
-cd ~/Downloads
-tar xzf bizops-source.tar.gz
 cd bizops
-bash scripts/deploy-fly.sh
+FLY_ORG=evan-wieds bash scripts/deploy-fly.sh
 ```
-- A browser opens to log in to Fly.io, and again to create a Claude token. Approve both.
+- A browser opens to log in to Fly.io. Approve it.
+- Paste your Anthropic API key when asked (the input is hidden).
 - At the end it prints your **dashboard address** (like `https://bizops-you-1234.fly.dev`) and your
   **password**. Save both somewhere safe.
 
@@ -61,7 +60,7 @@ Open your dashboard address, log in, click **Connect accounts**, and press **Tes
    - From address: `hello@yourbrand.com`
    - Legal sender name: your name or company
    - Postal address: your PO box
-3. **Model access** (optional): paste your Jev key and/or Anthropic API key.
+3. **Model access** (optional): paste your Jev key, or replace the Anthropic API key.
 4. **Password** (optional): change it to one you'll remember.
 
 ## Part 5: Start a business
@@ -75,10 +74,16 @@ Pick one:
 
 ## Part 6: Supervise (10 minutes a day, the first week)
 
+Security is on by default: 5 wrong passwords lock that address out for 15 minutes, and **System ->
+Login sessions** shows every logged-in browser with a revoke button. Changing the password logs out
+everything.
+
 - **Needs you**: the only things that require you (signing contracts, approving a new vendor, etc.).
 - **Sales & customers**: read the first emails the agents send; see leads, replies, payments, customers.
 - **Activity**: everything every agent did, with its reason and cost.
-- **Money**: spend vs revenue per business.
+- **Money**: spend vs revenue per business, refunds and chargebacks (subtracted automatically), and the
+  monthly reinvestment waterfall (verified profit -> tax reserve -> operating reserve -> reinvest/treasury).
+- **Chargebacks** appear in Needs you: respond to them in the Stripe dashboard.
 - **Audit**: issues the outside auditor found.
 - **Emergency**: the red **Kill switch** in the sidebar stops everything instantly.
 

@@ -364,3 +364,9 @@ Verified live: the seeded company ran on real Claude models through the Claude l
 
 Next: connectors (email send, Stripe read for revenue), experiments, tournaments, ideas pipeline ->
 auto-created trial orgs, capital-allocation waterfall, a real payments provider.
+
+Money safety + reinvestment (done): Stripe renewals, refunds and chargebacks reverse revenue (verified
+profit can't be overstated); BIZOPS_SECRET required; server-side revocable sessions, login lockout, CSRF on
+every dashboard POST; public demo budget-gated before the model call with proxy-aware client IPs; file links
+on their own key; capital-allocation waterfall with two keys (capital.py). Still open: experiments and
+best-of-N tournaments, a payments provider beyond Stripe Payment Links.

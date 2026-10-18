@@ -208,6 +208,37 @@ def estimate_tokens(*parts: Any) -> int:
     return sum(len(p if isinstance(p, str) else json.dumps(p, default=str)) for p in parts) // 4 + 1
 
 
+async def public_model_call(core: Any, *, org_id: str, action: str, est_micros: int, run: Any) -> tuple[Any, int]:
+    """A model call made for an anonymous visitor (e.g. the public voice demo), not by an agent. Checked
+    BEFORE the call: kill switches, the org/platform budget, and the org's own daily cap for this action
+    (policy public.<action>_daily_max_usd). `run` is a coroutine factory returning (result, LLMResponse|None)."""
+    from .engine import platform_paused
+    from .util import day_start, usd_to_micros
+    db, settings = core.db, core.settings
+    org = get_org(db, org_id)
+    if platform_paused(db) or not org or org["status"] not in ("active", "trial"):
+        raise RunStop("stopped", "paused")
+    chk = budget.check_spend(db, settings, org=org, agent=None, amount=est_micros)
+    if chk.ok:
+        cap = usd_to_micros(float(settings.policy.get("public", {}).get(f"{action}_daily_max_usd", 2)))
+        today = int(db.scalar("SELECT COALESCE(SUM(amount_micros), 0) AS s FROM ledger_entries WHERE org_id = ? "
+                              "AND kind = 'model_cost' AND ref_id = ? AND ts >= ?", (org_id, f"public:{action}", day_start())) or 0)
+        if today + est_micros > cap:
+            chk = budget.BudgetCheck(False, f"public.{action}_daily_max", f"{action}: today's public budget is used up")
+    if not chk.ok:
+        log_event(db, kind="model", action=f"public.{action}", phase="point", org_id=org_id, actor_kind="system",
+                  result={"rule": chk.rule, "detail": chk.detail}, outcome="refused")
+        raise RunStop("budget", chk.detail)
+    result, resp = await run()
+    cost = response_cost(settings, resp) if resp is not None else 0
+    if cost:
+        ledger.record(db, org_id=org_id, kind="model_cost", amount_micros=cost, source="model",
+                      memo=f"public {action}", ref_id=f"public:{action}")
+    log_event(db, kind="model", action=f"public.{action}", phase="point", org_id=org_id, actor_kind="system",
+              cost_micros=cost, outcome="ok")
+    return result, cost
+
+
 async def model_call(ctx: Ctx, *, model: str, system: str, messages: list[dict], tools: list[dict],
                      max_tokens: int, effort: str, turn: int) -> tuple[LLMResponse, int]:
     """A model call through the gateway: kill switch and budget checked before every call."""

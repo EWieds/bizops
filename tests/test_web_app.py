@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import with_csrf
 from bizops import ledger
 from bizops.scheduler import Scheduler
 from bizops.seed import seed_demo
@@ -18,6 +19,7 @@ async def seeded(core):
 @pytest.fixture
 def client(core, seeded):
     with TestClient(create_app(core, run_scheduler=False)) as c:
+        with_csrf(c)
         yield c
 
 

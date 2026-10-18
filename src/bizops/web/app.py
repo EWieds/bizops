@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import html
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from .. import ledger
+from .. import business, ledger
 from ..budget import platform_caps
 from ..core import Core
 from ..db import Database
@@ -135,12 +136,13 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             task.cancel()
         await core.aclose()
 
+    from ..security import check_secret
+    check_secret()  # refuse to start without a real signing secret: no forgeable cookies or links, ever
     app = FastAPI(title="bizops", lifespan=lifespan)
-    from .auth import ensure_secret, install_auth
+    from .auth import active_sessions, install_auth
     from .connect import register_connect
     from .public import PUBLIC_PREFIXES, register_public
-    ensure_secret(core.settings.home / ".env")
-    install_auth(app, PUBLIC_PREFIXES)
+    install_auth(app, PUBLIC_PREFIXES, core.db)
     register_public(app, core)
     app.state.core = core
     app.state.scheduler = scheduler
@@ -154,7 +156,8 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             "open_findings": open_findings or 0,
             "new_ideas": db.scalar("SELECT COUNT(*) AS n FROM proposals WHERE status = 'new'") or "",
             "llm_paused_until": (lambda v: v if v and v > iso() else "")(get_setting(db, "llm_paused_until", "")), "backend_label": BACKEND_LABELS.get(core.backend, core.backend),
-            "backend_why": getattr(core, "backend_why", ""), "nav": request.url.path, **ctx})
+            "backend_why": getattr(core, "backend_why", ""), "nav": request.url.path,
+            "csrf": getattr(request.state, "csrf", ""), **ctx})
 
     def back(request: Request, default: str = "/") -> RedirectResponse:
         return RedirectResponse(request.headers.get("referer") or default, status_code=303)
@@ -568,6 +571,8 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
                       "ORDER BY id DESC LIMIT 30")
         monthly, daily, ceiling = platform_caps(settings)
         return page(request, "system.html", agents=agents, jobs=jobs, running=set(scheduler.running),
+                    sessions=active_sessions(db), current_session=getattr(request.state, "session_id", None),
+                    has_password=bool(os.environ.get("BIZOPS_PASSWORD_HASH")),
                     tiers=settings.models.get("tiers", {}), search_provider=core.web.search_provider(),
                     payments=core.payments.name, jev=bool(settings.secret("JEV_API_URL")),
                     limits=settings.policy["runs"], last_tick=get_setting(db, "maintenance:last_tick", ""),
@@ -588,14 +593,15 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
                                         "AND kind = 'model_cost' AND ts >= ?", (o["id"], ms))
             o["revenue"] = ledger.revenue(db, since="2000", org_id=o["id"])
             o["sandbox_revenue"] = ledger.revenue(db, since="2000", org_id=o["id"], sandbox=True)
-            o["cleared"] = int(db.scalar("SELECT COALESCE(SUM(amount_cents),0) AS s FROM payments_in WHERE org_id = ? AND sandbox = 0 "
-                                         "AND status = 'paid' AND clears_at <= ?", (o["id"], iso())) or 0) * 10_000
+            o["cleared"] = business.cleared_revenue_cents(db, org_id=o["id"]) * 10_000
         payees = db.all("SELECT p.*, o.name AS org_name FROM payees p LEFT JOIN orgs o ON o.id = p.org_id ORDER BY p.created_at DESC")
         entries = db.all("SELECT l.*, o.name AS org_name, a.name AS agent_name FROM ledger_entries l "
                          "JOIN orgs o ON o.id = l.org_id LEFT JOIN agents a ON a.id = l.agent_id "
                          "WHERE l.kind != 'model_cost' ORDER BY l.ts DESC LIMIT 100")
         monthly, daily, ceiling = platform_caps(settings)
+        from ..capital import waterfall_view
         return page(request, "money.html", orgs=orgs, payees=payees, entries=entries, money=settings.policy["money"],
+                    cap=waterfall_view(db), holdback=settings.policy.get("sales", {}).get("revenue_holdback_days", 30),
                     caps={"monthly": monthly, "daily": daily, "ceiling": ceiling,
                           "month": ledger.spent(db, since=ms), "day": ledger.spent(db, since=day_start())})
 

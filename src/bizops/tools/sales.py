@@ -270,8 +270,8 @@ async def share_file(ctx: Ctx, args: dict) -> dict:
                      (args["artifact_id"], args["artifact_id"], ctx.agent["org_id"]))
     if not row:
         raise PolicyRefusal("files.missing", "no such file in your org")
-    token = business.unsub_token(ctx.settings, row["id"])
-    return {"url": f"{business.public_base(ctx.db, ctx.settings)}/f/{row['id']}/{token.split('.')[1]}", "name": row["name"]}
+    return {"url": f"{business.public_base(ctx.db, ctx.settings)}/f/{row['id']}/{business.file_sig(row['id'])}",
+            "name": row["name"]}
 
 
 # ---------------------------------------------------------------- voice agents (one product type)
@@ -321,6 +321,10 @@ async def test_voice_agent(ctx: Ctx, args: dict) -> ToolOutput:
     return ToolOutput({"agent_says": answer}, cost_micros=response_cost(ctx.settings, resp) if resp else 0)
 
 
+def voice_model(settings) -> str:
+    return settings.models.get("voice_model") or settings.models["tiers"]["worker"]
+
+
 async def voice_reply(core, cfg: dict, history: list[dict]) -> tuple[str, object]:
     """One receptionist turn, shared by test_voice_agent and the public web demo."""
     from ..connectors.voice import receptionist_prompt
@@ -328,7 +332,7 @@ async def voice_reply(core, cfg: dict, history: list[dict]) -> tuple[str, object
         last = history[-1]["content"]
         return (f"Thanks for calling {cfg.get('business_name')}! Our hours are {cfg.get('hours', 'listed on our site')}. "
                 f"I can take your name and number for: {clip(last, 80)}"), None
-    model = core.settings.models.get("voice_model") or core.settings.models["tiers"]["worker"]
+    model = voice_model(core.settings)
     transcript = "\n".join(f"{'Caller' if m['role'] == 'user' else 'You'}: {m['content']}" for m in history[-12:])
     data, resp = await core.llm.structured(model=model, system=receptionist_prompt(cfg),
                                            prompt=f"Phone call so far:\n{transcript}\n\nReply as the receptionist (1-3 short sentences).",

@@ -21,6 +21,7 @@ if command -v claude >/dev/null 2>&1 && ! claude auth status --json 2>/dev/null 
   claude auth login || claude || true
 fi
 
+.venv/bin/bizops init-secret   # the signing key for logins and links, kept in .env
 .venv/bin/bizops install-service --home "$HOME_DIR"
 sleep 3
 URL="http://127.0.0.1:8000"

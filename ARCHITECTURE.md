@@ -64,6 +64,23 @@ send_email (compliance in code) -> replies arrive (IMAP poll) -> send_payment_li
 Stripe reports the payment (event poll, no public webhook needed) -> revenue in the ledger (connector
 source, per business, 30-day holdback before it counts as cleared) -> customer created -> customer
 success onboards and delivers -> goals with a metric_key are measured from this data automatically.
+The same poll applies renewals (invoice.paid, matched to the first checkout through the subscription),
+refunds (charge.refunded, cumulative, so replays are harmless) and chargebacks (charge.dispute.*:
+reversed when opened, restored only if won, plus a Needs-you item to respond in Stripe). Reversals are new
+`revenue_reversal` ledger rows; `ledger.revenue` and `business.cleared_revenue_cents` are always net.
+
+## Capital allocation (capital.py, tools/capital.py)
+Monthly, once a month's holdback has passed, `capital_cycle` closes it per org: verified profit (cleared
+revenue net of refunds/disputes, minus all spend) -> 25% tax reserve -> operating reserve (2 months of
+costs) -> surplus. Two keys: the org CEO proposes (reinvest in self and/or send to the platform treasury,
+with reasoning, numbers and expected result); the CFO (or the platform CFO if the org has none) scores and
+approves (executes) or rejects (escalates to the platform CEO). The platform CEO proposes treasury -> org
+moves; the platform CFO is the second key. Reinvesting raises the recipient's monthly cap. Guardrails in
+`check_proposal`, re-checked at execution: verified profit only; >= 50% reinvested in self unless both keys
+write a case; no org gets > 40% of a month's treasury; trial orgs <= venture cap; losing orgs need a case;
+caps rise <= 25%/month and stay inside the platform cap; the treasury floor is never spent; there is no
+way to move money out (owner distributions are a hard stop). Executed allocations go to the auditor and
+are later scored against what happened. Money page: treasury, reserves, each org's waterfall, decision log.
 
 Compliance enforced in code: B2B only with a public source, sender identity + postal address +
 one-click unsubscribe on every email, suppression list, unsubscribe replies honored automatically,
@@ -80,6 +97,15 @@ One server: the dashboard (owner login required; without a password it only answ
 public customer-facing routes: /s/<business>/<page> websites, /demo/<agent> live voice-agent demos,
 /pay/<offer> checkout, /u/<token> unsubscribe, /f/<file>/<sig> shared deliverables. Deploy:
 Dockerfile + fly.toml + scripts/deploy-fly.sh, or `bizops serve --tunnel` from a computer.
+
+Security (security.py, web/auth.py): BIZOPS_SECRET is required (>= 32 chars; the app refuses to start
+without it, dry runs get a throwaway one) and each use derives its own key (file links, sessions...).
+Owner sessions are server-side (`sessions` table stores only a hash of the cookie) and revocable; changing
+the password logs everyone out. 5 failed logins per address in 15 min lock it for 15 min. Every dashboard
+POST needs the CSRF token (header from htmx, hidden field added to forms by base.html; double-submit cookie
+when there is no password). Client IPs come from fly-client-ip / cf-connecting-ip only when actually behind
+that proxy. The public voice demo goes through `gateway.public_model_call`: kill switch, org budget and a
+per-business daily ceiling are checked BEFORE the model call.
 
 ## Ideas pipeline (ideas.py, tools/ideas.py)
 maintenance runs research_cycle every venture.research_every_days: it tasks the venture analyst, who

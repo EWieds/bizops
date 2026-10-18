@@ -45,12 +45,24 @@ def sender_identity(settings: Settings, org: dict) -> dict[str, str]:
 
 
 def _secret(settings: Settings) -> bytes:
-    return (settings.secret("BIZOPS_SECRET") or "bizops-local-secret").encode()
+    from .security import master_secret
+    return master_secret()  # no fallback: a missing secret stops sending instead of signing forgeable links
 
 
 def unsub_token(settings: Settings, email: str) -> str:
     sig = hmac.new(_secret(settings), email.lower().encode(), hashlib.sha256).hexdigest()[:20]
     return f"{email.lower().encode().hex()}.{sig}"
+
+
+def file_sig(aid: str) -> str:
+    """Signature for a shared-file link (/f/<artifact>/<sig>), with its own key, separate from unsubscribe links."""
+    from .security import sign
+    return sign("file-link", aid)
+
+
+def file_sig_ok(aid: str, sig: str) -> bool:
+    from .security import verify
+    return verify("file-link", aid, sig)
 
 
 def unsub_email(settings: Settings, token: str) -> str | None:
@@ -312,22 +324,24 @@ async def create_offer(core: Any, *, agent: dict, name: str, description: str, p
 
 def record_payment(db: Database, settings: Settings, *, provider: str, provider_ref: str, amount_cents: int,
                    offer_id: str | None, lead_id: str | None, payer_email: str | None, sandbox: bool,
-                   currency: str = "usd") -> dict | None:
+                   currency: str = "usd", customer_id: str | None = None, provider_ids: dict | None = None) -> dict | None:
     """A payment the provider (or sandbox checkout) reported. Writes revenue, creates/updates the customer,
-    and wakes the team to onboard. Idempotent on provider_ref."""
+    and wakes the team to onboard. Idempotent on provider_ref. `provider_ids` (payment_intent, invoice, charge,
+    subscription) let later refunds, disputes and renewals find this payment."""
     if db.one("SELECT 1 AS x FROM payments_in WHERE provider_ref = ?", (provider_ref,)):
         return None
+    ids = provider_ids or {}
     offer = db.one("SELECT * FROM offers WHERE id = ?", (offer_id,)) if offer_id else None
-    lead = db.one("SELECT * FROM leads WHERE id = ?", (lead_id,)) if lead_id else None
+    cust = db.one("SELECT * FROM customers WHERE id = ?", (customer_id,)) if customer_id else None
+    lead = db.one("SELECT * FROM leads WHERE id = ?", (lead_id or (cust or {}).get("lead_id"),)) if lead_id or cust else None
     if lead is None and payer_email:
         lead = db.one("SELECT * FROM leads WHERE lower(email) = ? ORDER BY created_at DESC LIMIT 1", (payer_email.lower(),))
-    org_id = (offer or lead or {}).get("org_id")
+    org_id = (offer or cust or lead or {}).get("org_id")
     if not org_id:
         return None
     holdback = float(settings.policy.get("sales", {}).get("revenue_holdback_days", 30))
     ts = iso()
-    cust = None
-    if lead:
+    if cust is None and lead:
         cust = db.one("SELECT * FROM customers WHERE lead_id = ? AND org_id = ?", (lead["id"], org_id))
     with db.tx() as conn:
         if cust is None:
@@ -347,7 +361,10 @@ def record_payment(db: Database, settings: Settings, *, provider: str, provider_
                                      "provider": provider, "provider_ref": provider_ref, "amount_cents": amount_cents,
                                      "currency": currency, "payer_email": payer_email, "status": "paid",
                                      "sandbox": int(sandbox), "paid_at": ts,
-                                     "clears_at": iso(now() + timedelta(days=holdback))})
+                                     "clears_at": iso(now() + timedelta(days=holdback)),
+                                     "provider_payment_intent": ids.get("payment_intent"),
+                                     "provider_invoice": ids.get("invoice"), "provider_charge": ids.get("charge"),
+                                     "provider_subscription": ids.get("subscription")})
         ev = log_event(conn, actor_kind="connector", kind="money", action="payment.received", org_id=org_id,
                        args={"provider": provider, "amount_cents": amount_cents, "offer": offer_id, "lead": lead_id},
                        result={"customer": cust["id"], "sandbox": sandbox}, outcome="ok", ref_type="payment", ref_id=pid)
@@ -370,8 +387,147 @@ def record_payment(db: Database, settings: Settings, *, provider: str, provider_
     return {"payment_id": pid, "customer_id": cust["id"], "new_customer": new_customer}
 
 
+def find_payment(db: Database, *, charge: str | None = None, payment_intent: str | None = None,
+                 invoice: str | None = None) -> dict | None:
+    for col, v in (("provider_charge", charge), ("provider_payment_intent", payment_intent), ("provider_invoice", invoice)):
+        if v:
+            row = db.one(f"SELECT * FROM payments_in WHERE {col} = ? ORDER BY paid_at DESC LIMIT 1", (v,))
+            if row:
+                return row
+    return None
+
+
+def _payment_status(p: dict) -> str:
+    if p["disputed_cents"]:
+        return "disputed"
+    if p["refunded_cents"] >= p["amount_cents"]:
+        return "refunded"
+    return "partially_refunded" if p["refunded_cents"] else "paid"
+
+
+def _notify_money_loss(db: Database, settings: Settings, p: dict, text: str) -> None:
+    for a in db.all("SELECT * FROM agents WHERE org_id = ? AND status = 'active' AND role IN ('ceo', 'customer_success') "
+                    "ORDER BY depth", (p["org_id"],))[:2]:
+        post_message(db, settings, org_id=p["org_id"], sender_kind="system", sender_id=None, recipient_kind="agent",
+                     recipient_id=a["id"], type="instruction",
+                     body=f"{text} Find out why (check the customer's emails and their service), fix the cause, and "
+                          "record what you learned. Do not contact a customer who disputed; the owner handles disputes.")
+
+
+def record_refund(db: Database, settings: Settings, payment: dict, *, refunded_total_cents: int,
+                  provider_event: str | None = None) -> int:
+    """The provider says `refunded_total_cents` of this payment has been refunded so far (cumulative, as
+    Stripe reports it). Writes a revenue reversal for the new part only, so replays are harmless.
+    Returns the newly reversed cents."""
+    with db.tx() as conn:
+        p = dict(conn.execute("SELECT * FROM payments_in WHERE id = ?", (payment["id"],)).fetchone())
+        room = p["amount_cents"] - p["refunded_cents"] - p["disputed_cents"]
+        delta = max(0, min(refunded_total_cents - p["refunded_cents"], room))
+        if refunded_total_cents <= p["refunded_cents"]:
+            return 0
+        p["refunded_cents"] = min(refunded_total_cents, p["amount_cents"])
+        conn.execute("UPDATE payments_in SET refunded_cents = ?, status = ? WHERE id = ?",
+                     (p["refunded_cents"], _payment_status(p), p["id"]))
+        if p["customer_id"] and p["refunded_cents"] >= p["amount_cents"]:
+            conn.execute("UPDATE customers SET status = 'refunded', mrr_cents = 0, updated_at = ? WHERE id = ?",
+                         (iso(), p["customer_id"]))
+        ev = log_event(conn, actor_kind="connector", kind="money", action="payment.refunded", org_id=p["org_id"],
+                       args={"payment": p["id"], "refunded_total_cents": refunded_total_cents, "event": provider_event},
+                       result={"reversed_cents": delta, "status": _payment_status(p)}, outcome="ok",
+                       ref_type="payment", ref_id=p["id"])
+        if delta:
+            ledger.record(conn, org_id=p["org_id"], kind="revenue_reversal", amount_micros=delta * 10_000,
+                          source="sandbox" if p["sandbox"] else "connector",
+                          memo=f"{p['provider']}: refund of payment {p['id']}", ref_id=p["id"], event_id=ev)
+    if delta:
+        _notify_money_loss(db, settings, p, f"Refund: ${delta / 100:.2f} of payment {p['id']} "
+                                            f"(customer {p['customer_id'] or '-'}) was refunded.")
+    return delta
+
+
+def record_dispute(db: Database, settings: Settings, payment: dict, *, event: str, status: str, amount_cents: int,
+                   provider_event: str | None = None) -> int:
+    """A chargeback. The disputed amount is reversed as soon as the dispute opens (conservative), and
+    restored only if the dispute is won. Returns the net change in cents (negative = reversed)."""
+    won = event == "funds_reinstated" or (event == "closed" and status == "won")
+    lost = event == "closed" and status == "lost"
+    with db.tx() as conn:
+        p = dict(conn.execute("SELECT * FROM payments_in WHERE id = ?", (payment["id"],)).fetchone())
+        change = 0
+        if won and p["disputed_cents"]:
+            change = p["disputed_cents"]
+            p["disputed_cents"] = 0
+        elif not won and not p["disputed_cents"] and p["status"] != "dispute_lost":
+            amt = max(0, min(amount_cents or p["amount_cents"], p["amount_cents"] - p["refunded_cents"]))
+            p["disputed_cents"] = amt
+            change = -amt
+        status_now = "dispute_lost" if lost else _payment_status(p)
+        if lost:  # stays reversed for good; keep disputed_cents so cleared revenue excludes it
+            conn.execute("UPDATE payments_in SET disputed_cents = ?, status = 'dispute_lost' WHERE id = ?",
+                         (p["disputed_cents"], p["id"]))
+        else:
+            conn.execute("UPDATE payments_in SET disputed_cents = ?, status = ? WHERE id = ?",
+                         (p["disputed_cents"], status_now, p["id"]))
+        ev = log_event(conn, actor_kind="connector", kind="money", action=f"payment.dispute_{event}", org_id=p["org_id"],
+                       args={"payment": p["id"], "status": status, "amount_cents": amount_cents, "event": provider_event},
+                       result={"change_cents": change, "status": status_now}, outcome="ok",
+                       ref_type="payment", ref_id=p["id"])
+        src = "sandbox" if p["sandbox"] else "connector"
+        if change < 0:
+            ledger.record(conn, org_id=p["org_id"], kind="revenue_reversal", amount_micros=-change * 10_000, source=src,
+                          memo=f"{p['provider']}: chargeback on payment {p['id']}", ref_id=p["id"], event_id=ev)
+        elif change > 0:
+            ledger.record(conn, org_id=p["org_id"], kind="revenue", amount_micros=change * 10_000, source=src,
+                          memo=f"{p['provider']}: dispute won on payment {p['id']}", ref_id=p["id"], event_id=ev)
+    if change < 0:
+        _notify_money_loss(db, settings, p, f"Chargeback opened: ${-change / 100:.2f} on payment {p['id']} "
+                                            f"(customer {p['customer_id'] or '-'}) is reversed until the dispute is decided.")
+        file_owner_item(db, p["org_id"], "billing_dispute",
+                        f"Chargeback on payment {p['id']} (${-change / 100:.2f}). Respond to it in the Stripe dashboard "
+                        "(Payments -> Disputes) with the customer's emails and proof of service.")
+    return change
+
+
+def file_owner_item(db: Database, org_id: str, rule: str, text: str) -> None:
+    """Something only the owner can do, in the Needs-you queue (deduplicated by text)."""
+    rule, args = f"hard_stop.{rule}", json.dumps({"summary": text})
+    if db.one("SELECT 1 AS x FROM policy_decisions WHERE rule = ? AND args_json = ? AND status = 'open'", (rule, args)):
+        return
+    db.execute("INSERT INTO policy_decisions (id, ts, org_id, action, args_json, verdict, rule, status) "
+               "VALUES (?, ?, ?, ?, ?, 'hard_stop', ?, 'open')", (new_id("pd"), iso(), org_id, rule, args, rule))
+
+
+def cleared_revenue_cents(db: Database, *, org_id: str | None = None, cleared_by: str | None = None,
+                          paid_from: str | None = None, paid_before: str | None = None) -> int:
+    """Real revenue past the refund/chargeback holdback, net of refunds and open or lost disputes.
+    Only this money is ever allocatable."""
+    where, params = ["sandbox = 0", "clears_at <= ?"], [cleared_by or iso()]
+    for cond, v in (("org_id = ?", org_id), ("paid_at >= ?", paid_from), ("paid_at < ?", paid_before)):
+        if v:
+            where.append(cond)
+            params.append(v)
+    return int(db.scalar("SELECT COALESCE(SUM(amount_cents - refunded_cents - disputed_cents), 0) AS s FROM payments_in "
+                         f"WHERE {' AND '.join(where)}", tuple(params)) or 0)
+
+
+def _offer_for(db: Database, it: dict) -> dict | None:
+    if it.get("payment_link"):
+        offer = db.one("SELECT * FROM offers WHERE provider_link_id = ?", (it["payment_link"],))
+        if offer:
+            return offer
+    if it.get("offer_id"):
+        offer = db.one("SELECT * FROM offers WHERE id = ?", (it["offer_id"],))
+        if offer:
+            return offer
+    if it.get("price_id"):
+        return db.one("SELECT * FROM offers WHERE provider_price_id = ?", (it["price_id"],))
+    return None
+
+
 async def poll_billing(core: Any) -> int:
-    db = core.db
+    """Apply the provider's money events: payments and renewals add revenue; refunds and chargebacks
+    reverse it. Events for payments that aren't ours are ignored. Returns the number of events applied."""
+    db, settings = core.db, core.settings
     billing = core.connectors.billing
     if not billing.live:
         return 0
@@ -379,17 +535,33 @@ async def poll_billing(core: Any) -> int:
     items, new_cursor = await billing.poll_payments(cursor)
     n = 0
     for it in items:
-        offer = None
-        if it.get("payment_link"):
-            offer = db.one("SELECT * FROM offers WHERE provider_link_id = ?", (it["payment_link"],))
-        if offer is None and it.get("offer_id"):
-            offer = db.one("SELECT * FROM offers WHERE id = ?", (it["offer_id"],))
-        if offer is None:
-            continue  # not one of ours
-        if record_payment(db, core.settings, provider=billing.name, provider_ref=it["provider_ref"],
-                          amount_cents=it["amount_cents"], offer_id=offer["id"], lead_id=it.get("lead_id"),
-                          payer_email=it.get("payer_email"), sandbox=False, currency=it.get("currency", "usd")):
-            n += 1
+        kind = it.get("kind", "payment")
+        if kind == "payment":
+            prior = db.one("SELECT * FROM payments_in WHERE provider_subscription = ? ORDER BY paid_at LIMIT 1",
+                           (it["subscription"],)) if it.get("subscription") else None
+            offer = _offer_for(db, it) or (db.one("SELECT * FROM offers WHERE id = ?", (prior["offer_id"],))
+                                           if prior and prior["offer_id"] else None)
+            if offer is None:
+                continue  # not one of ours
+            ids = {k: it.get(k) for k in ("payment_intent", "invoice", "charge", "subscription")}
+            if record_payment(db, settings, provider=billing.name, provider_ref=it["provider_ref"],
+                              amount_cents=it["amount_cents"], offer_id=offer["id"],
+                              lead_id=it.get("lead_id") or (prior or {}).get("lead_id"),
+                              payer_email=it.get("payer_email"), sandbox=False, currency=it.get("currency", "usd"),
+                              customer_id=(prior or {}).get("customer_id"), provider_ids=ids):
+                n += 1
+            continue
+        p = find_payment(db, charge=it.get("charge"), payment_intent=it.get("payment_intent"), invoice=it.get("invoice"))
+        if p is None:
+            continue  # a charge that isn't one of ours
+        if it.get("charge") and not p["provider_charge"]:
+            db.execute("UPDATE payments_in SET provider_charge = ? WHERE id = ?", (it["charge"], p["id"]))
+        if kind == "refund":
+            n += bool(record_refund(db, settings, p, refunded_total_cents=it["refunded_total_cents"],
+                                    provider_event=it["provider_ref"]))
+        elif kind == "dispute":
+            n += bool(record_dispute(db, settings, p, event=it["event"], status=it["status"],
+                                     amount_cents=it["amount_cents"], provider_event=it["provider_ref"]))
     if new_cursor:
         set_setting(db, "billing:cursor", new_cursor)
     return n
