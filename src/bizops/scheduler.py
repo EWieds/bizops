@@ -43,6 +43,10 @@ class Scheduler:
         if platform_paused(db):
             return []
         ts = iso()
+        from .engine import get_setting
+        paused_until = get_setting(db, "llm_paused_until", "")
+        if paused_until and paused_until > ts:
+            return []  # model provider limit: everyone waits, then resumes on their own
         rows = db.all(
             "SELECT a.id, a.wake_requested_at, a.next_wake_at, a.last_run_at, a.min_interval_s FROM agents a "
             "JOIN orgs o ON o.id = a.org_id WHERE a.status = 'active' AND o.status IN ('active','trial') "
@@ -141,7 +145,8 @@ class Scheduler:
                 pending = (pending or 0) + int(self.core.db.scalar(
                     "SELECT (SELECT COUNT(*) FROM sim_actions WHERE done = 0) + "
                     "(SELECT COUNT(*) FROM emails WHERE direction = 'in' AND processed = 0) AS n") or 0)
-                if not pending or platform_paused(self.core.db):
+                from .engine import get_setting
+                if not pending or platform_paused(self.core.db) or get_setting(self.core.db, "llm_paused_until", "") > iso():
                     return
                 await asyncio.sleep(0.2)  # a wake is pending behind a min interval
             else:

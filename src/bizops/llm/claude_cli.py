@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from datetime import UTC, datetime, timedelta
 import os
 import shutil
 import uuid
@@ -18,7 +20,7 @@ from typing import Any
 
 from ..config import Settings
 from ..util import clip, usd_to_micros
-from .base import LLMResponse, SearchResult
+from .base import LLMRateLimited, LLMResponse, SearchResult
 
 TOOL_PROTOCOL = """
 
@@ -65,6 +67,19 @@ def _render_transcript(messages: list[dict]) -> str:
     parts.append("[now]\nDecide your next tool calls and put them in the tool_calls array of your JSON reply "
                  "(never invoke them natively). Reply with the JSON object only.")
     return "\n\n".join(parts)
+
+
+def _reset_in(text: str) -> float:
+    """Seconds until a 'resets 9:30pm (UTC)' style reset time; 30 minutes if unknown."""
+    m = re.search(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)", text, re.I)
+    if not m:
+        return 1800
+    hour = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "pm" else 0)
+    now = datetime.now(UTC)
+    at = now.replace(hour=hour, minute=int(m.group(2) or 0), second=0, microsecond=0)
+    if at <= now:
+        at += timedelta(days=1)
+    return (at - now).total_seconds() + 60
 
 
 def find_claude() -> str | None:
@@ -118,6 +133,9 @@ class ClaudeCLIClient:
             data = json.loads(text.splitlines()[-1] if text else "{}")
         except ValueError:
             raise ClaudeCLIError(f"claude CLI returned non-JSON: {clip(text or err.decode(errors='replace'), 400)}")
+        blob = f"{data.get('result') or ''} {err.decode(errors='replace')}"
+        if data.get("is_error") and re.search(r"(session|usage|rate) limit|limit reached|429|overloaded", blob, re.I):
+            raise LLMRateLimited(f"Claude usage limit: {clip(blob, 200)}", retry_after_s=_reset_in(blob))
         if data.get("is_error") or data.get("subtype") not in (None, "success"):
             raise ClaudeCLIError(f"claude CLI error ({data.get('subtype')}): {clip(str(data.get('result') or err.decode(errors='replace')), 400)}")
         return data

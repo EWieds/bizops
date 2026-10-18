@@ -38,6 +38,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     from .engine import set_setting
     from .web.app import create_app
     from .web.auth import set_password
+    os.environ["BIZOPS_PORT"] = str(args.port)
     core = _core(args)
     _bootstrap_security(core)
     if os.environ.get("FLY_APP_NAME") and not os.environ.get("PUBLIC_BASE_URL"):

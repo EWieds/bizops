@@ -21,7 +21,7 @@ from . import budget, ledger
 from .db import insert
 from .engine import PolicyRefusal, get_agent, get_org, is_runnable
 from .events import log_event
-from .llm.base import LLMResponse, price_micros, response_cost
+from .llm.base import LLMRateLimited, LLMResponse, price_micros, response_cost
 from .policy import ALLOW, BLOCK, HARD_STOP, check_action
 from .tools import REGISTRY, Ctx, ToolOutput, load_all
 from .util import clip, dumps, iso, new_id
@@ -233,6 +233,13 @@ async def model_call(ctx: Ctx, *, model: str, system: str, messages: list[dict],
     try:
         resp = await ctx.core.llm.complete(model=model, system=system, messages=messages, tools=tools,
                                            max_tokens=max_tokens, effort=effort)
+    except LLMRateLimited as e:
+        from .engine import set_setting
+        from .util import iso_in
+        set_setting(db, "llm_paused_until", iso_in(e.retry_after_s))
+        log_event(db, kind="model", action="llm.call", phase="after", result={"rate_limited": str(e)[:300],
+                  "retry_after_s": e.retry_after_s}, outcome="refused", **base)
+        raise RunStop("rate_limited", f"model provider limit; all agents pause and resume automatically ({str(e)[:160]})")
     except Exception as e:
         log_event(db, kind="model", action="llm.call", phase="after",
                   result={"error": f"{type(e).__name__}: {clip(str(e), 500)}"}, outcome="error", **base)

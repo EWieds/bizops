@@ -58,7 +58,12 @@ class AnthropicClient:
         }
         if tools:
             kwargs["tools"] = tools
-        resp = await self._create(**kwargs)
+        try:
+            resp = await self._create(**kwargs)
+        except anthropic.RateLimitError as e:
+            from .base import LLMRateLimited
+            retry = float(getattr(e, "response", None) and e.response.headers.get("retry-after") or 60)
+            raise LLMRateLimited(f"Anthropic rate limit: {e}", retry_after_s=retry) from e
         return self._response(resp, model)
 
     async def structured(self, *, model: str, system: str, prompt: str, schema: dict,

@@ -11,6 +11,14 @@ from typing import Any, Protocol
 from ..config import Settings
 
 
+class LLMRateLimited(RuntimeError):
+    """The model provider says: slow down (subscription session limit, 429...). retry_after_s is a hint."""
+
+    def __init__(self, msg: str, retry_after_s: float = 1800):
+        super().__init__(msg)
+        self.retry_after_s = retry_after_s
+
+
 @dataclass
 class LLMResponse:
     content: list[dict[str, Any]]

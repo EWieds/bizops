@@ -151,7 +151,8 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         open_findings = db.scalar("SELECT COUNT(*) AS n FROM audit_findings WHERE status = 'open'")
         return TEMPLATES.TemplateResponse(request, name, {
             "paused": platform_paused(db), "dry_run": core.llm.name == "dry-run", "open_queue": open_queue or 0,
-            "open_findings": open_findings or 0, "backend_label": BACKEND_LABELS.get(core.backend, core.backend),
+            "open_findings": open_findings or 0,
+            "llm_paused_until": (lambda v: v if v and v > iso() else "")(get_setting(db, "llm_paused_until", "")), "backend_label": BACKEND_LABELS.get(core.backend, core.backend),
             "backend_why": getattr(core, "backend_why", ""), "nav": request.url.path, **ctx})
 
     def back(request: Request, default: str = "/") -> RedirectResponse:

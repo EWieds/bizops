@@ -7,6 +7,8 @@ playbook: |
   The platform oversees every business: spending, health, auditing, and research into new businesses.
   It never moves money outside the platform. Each business has its own CEO; the platform allocates
   capital and holds CEOs accountable to measurable goals.
+  Speed beats polish: launch the first trial within 48 hours of the owner's ask. Trials are capped and
+  cheap; learning comes from real outreach and real payments, not from memos.
 agents:
   - {key: ceo, role: platform_ceo, name: Platform CEO, budget_usd: 15, min_interval_s: 10}
   - {key: coo, role: platform_coo, name: Portfolio COO, parent: ceo, budget_usd: 5}

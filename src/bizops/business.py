@@ -32,7 +32,7 @@ UNSUB_WORDS = re.compile(r"\b(unsubscribe|remove me|stop emailing|take me off|no
 
 def public_base(db: Database, settings: Settings) -> str:
     return (get_setting(db, "public_base_url") or settings.secret("PUBLIC_BASE_URL")
-            or f"http://127.0.0.1:{settings.secret('BIZOPS_PUBLIC_PORT') or 8001}").rstrip("/")
+            or f"http://127.0.0.1:{settings.secret('BIZOPS_PORT') or 8000}").rstrip("/")
 
 
 def sender_identity(settings: Settings, org: dict) -> dict[str, str]:

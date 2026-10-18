@@ -87,3 +87,28 @@ def test_detect_backend(settings, tmp_path, monkeypatch):
     assert detect_backend(settings)[0] == "api"
     settings.dry_run = True
     assert detect_backend(settings)[0] == "dry_run"
+
+
+def test_reset_parsing():
+    from bizops.llm.claude_cli import _reset_in
+    assert 60 < _reset_in("You've hit your session limit · resets 9:30pm (UTC)") <= 86400 + 60
+    assert _reset_in("weird") == 1800
+
+
+async def test_rate_limit_pauses_everyone_and_resumes(core, org, monkeypatch):
+    from bizops.engine import get_setting, human_message
+    from bizops.llm.base import LLMRateLimited
+    from bizops.runtime import run_agent
+    from bizops.scheduler import Scheduler
+
+    async def limited(**kw):
+        raise LLMRateLimited("session limit", retry_after_s=600)
+    monkeypatch.setattr(core.llm, "complete", limited)
+    human_message(core.db, core.settings, org["ceo"]["id"], "hi")
+    rid = await run_agent(core, org["ceo"]["id"], "message")
+    assert core.db.scalar("SELECT status FROM runs WHERE id = ?", (rid,)) == "rate_limited"
+    assert get_setting(core.db, "llm_paused_until")
+    human_message(core.db, core.settings, org["cfo"]["id"], "hi")
+    assert Scheduler(core).due_agents() == []
+    core.db.execute("UPDATE settings SET value = '2000-01-01T00:00:00Z' WHERE key = 'llm_paused_until'")
+    assert Scheduler(core).due_agents()

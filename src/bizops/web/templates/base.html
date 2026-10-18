@@ -64,6 +64,7 @@
     {% for href, label, badge in links %}<a href="{{ href }}" class="whitespace-nowrap">{{ label }}</a>{% endfor %}
   </header>
   {% if paused %}<div class="bg-red-600 text-white text-center py-1.5 font-semibold">Platform paused. No agent runs, no actions execute.</div>{% endif %}
+  {% if llm_paused_until %}<div class="bg-sky-100 text-sky-900 text-center py-1 text-xs">Model usage limit reached: agents pause and resume automatically {{ llm_paused_until|ago }}. For uninterrupted 24/7 operation add an Anthropic API key on the Connect page.</div>{% endif %}
   {% if dry_run %}<div class="bg-amber-100 text-amber-900 text-center py-1 text-xs">Dry run: scripted model, simulated costs, sandbox payments. {{ backend_why }}</div>{% endif %}
   <main class="max-w-7xl mx-auto px-4 md:px-6 py-5">
   {% block body %}{% endblock %}
