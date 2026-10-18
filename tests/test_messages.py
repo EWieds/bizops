@@ -43,7 +43,7 @@ async def test_cross_org_peer_refused_supervisor_edge_allowed(core, org):
     assert not r.ok and "message.scope" in r.content
     r = await invoke(Ctx(core=core, agent=org["ceo"]), "recommend_up", {"text": "advice"})
     assert r.ok  # org CEO -> platform CEO is a supervisor edge
-    assert core.db.scalar("SELECT type FROM messages WHERE recipient_id = ?", (org["pceo"]["id"],)) == "recommendation"
+    assert core.db.scalar("SELECT type FROM messages WHERE recipient_id = ? AND sender_kind = 'agent'", (org["pceo"]["id"],)) == "recommendation"
 
 
 async def test_task_scope(core, org):

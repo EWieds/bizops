@@ -20,6 +20,7 @@ class LLMResponse:
     model: str
     cache_read_tokens: int = 0
     extra_cost_micros: int = 0   # server-side tool fees (e.g. web search)
+    cost_override_micros: int | None = None   # exact cost when the backend reports it (claude CLI)
 
     @property
     def tool_uses(self) -> list[dict[str, Any]]:
@@ -49,6 +50,13 @@ class LLMClient(Protocol):
                          max_tokens: int = 1000) -> tuple[dict, LLMResponse]: ...
 
     async def web_search(self, *, query: str, max_results: int) -> SearchResult: ...
+
+
+def response_cost(settings: Settings, resp: LLMResponse) -> int:
+    if resp.cost_override_micros is not None:
+        return resp.cost_override_micros
+    return price_micros(settings, resp.model, resp.input_tokens, resp.output_tokens,
+                       resp.cache_read_tokens) + resp.extra_cost_micros
 
 
 def price_micros(settings: Settings, model: str, input_tokens: int, output_tokens: int,

@@ -1,0 +1,14 @@
+# Digital products: templates, guides, small tools sold online.
+monthly_cap_usd: 50
+settings: {max_agents: 12, max_depth: 4, max_reports: 6}
+playbook: |
+  Find a specific audience with a recurring, expensive problem a template, guide or small tool can solve.
+  Validate demand before building (search volume, communities, competitor sales). Ship a minimal product,
+  price it simply, and iterate on the landing page with measured conversion data.
+agents:
+  - {key: ceo, role: ceo, name: CEO, budget_usd: 12, min_interval_s: 15}
+  - {key: cfo, role: cfo, name: CFO, parent: ceo, budget_usd: 4}
+  - {key: researcher, role: researcher, name: Demand Researcher, parent: ceo, budget_usd: 8}
+  - {key: marketer, role: marketer, name: Head of Growth, parent: ceo, budget_usd: 8}
+  - {key: writer, role: writer, name: Product Writer, parent: marketer, budget_usd: 4}
+  - {key: designer, role: designer, name: Product Designer, parent: ceo, budget_usd: 4}

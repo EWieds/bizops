@@ -101,10 +101,42 @@ def get_org(db: Database, org_id: str) -> dict | None:
     return db.one("SELECT * FROM orgs WHERE id = ?", (org_id,))
 
 
+def agent_row(settings: Settings, *, spec: dict, org_id: str, parent_id: str | None, depth: int,
+              created_by: str, ts: str) -> dict:
+    """Build an agent row from a role in config/roles.yaml plus per-agent overrides (focus, budget...)."""
+    role_key = spec["role"]
+    role = settings.role(role_key)
+    prompt = role["prompt"].strip()
+    if spec.get("focus"):
+        prompt += f"\n\nYour specific focus in this org: {spec['focus'].strip()}"
+    heartbeat = spec.get("heartbeat_s", role.get("heartbeat_s"))
+    min_default = settings.policy["runs"].get("default_min_interval_s", 30)
+    return {
+        "id": new_id("ag"), "org_id": org_id, "parent_agent_id": parent_id, "role": role_key,
+        "name": spec.get("name") or role.get("title", role_key), "title": role.get("title", role_key),
+        "system_prompt": prompt, "model_tier": spec.get("tier", role.get("tier", "worker")),
+        "model_override": spec.get("model"), "grants_json": dumps(spec.get("grants", role.get("grants", []))),
+        "kpi_json": dumps(spec.get("kpi", role.get("kpi", {}))),
+        "budget_micros": usd_to_micros(spec.get("budget_usd", 0)), "depth": depth, "status": "active",
+        "wake_interval_s": heartbeat, "min_interval_s": spec.get("min_interval_s", min_default),
+        "next_wake_at": iso_in(heartbeat) if heartbeat else None, "wake_requested_at": None,
+        "last_run_at": None, "created_by": created_by, "created_at": ts, "updated_at": ts,
+    }
+
+
+KICKOFF = """Kickoff. You now run {name}. Read the owner's brief and the playbook, then:
+1. Set 2-4 org goals with set_goal (owner: yourself). Each must be measurable, with a metric, a target and
+   a due date within 30-60 days. Prefer leading indicators you can actually measure early.
+2. Cascade: give each direct report 1-2 goals that ladder up to yours (set_goal with parent_goal_id).
+3. Create the first tasks with checkable deliverables (create_task) so work starts today.
+4. Hire (spawn_agent) only if a goal needs a skill your team lacks.
+Then yield. Goals are reviewed automatically on a cadence; you'll be woken for reviews."""
+
+
 def create_org_from_template(db: Database, settings: Settings, *, template: str, name: str | None = None,
                              brief: str = "", parent_org_id: str | None = None,
                              supervisor_agent_id: str | None = None, created_by: str = "human",
-                             monthly_cap_usd: float | None = None) -> str:
+                             monthly_cap_usd: float | None = None, kickoff: bool = True) -> str:
     """Insert an org and its starting org chart from a template. Returns the org id."""
     tpl = settings.template(template)
     name = name or tpl.get("name") or template
@@ -115,6 +147,8 @@ def create_org_from_template(db: Database, settings: Settings, *, template: str,
     agent_total = sum(usd_to_micros(a.get("budget_usd", 0)) for a in tpl["agents"])
     if agent_total > cap:
         raise PolicyRefusal("alloc.org", f"template agent budgets exceed org cap ({template})")
+    for spec in tpl["agents"]:
+        settings.role(spec["role"])  # fail early on unknown roles
 
     slug = slugify(name)
     if db.one("SELECT 1 AS x FROM orgs WHERE slug = ?", (slug,)):
@@ -123,41 +157,115 @@ def create_org_from_template(db: Database, settings: Settings, *, template: str,
     ts = iso()
     settings_json = dict(tpl.get("settings", {}))
     settings_json["playbook"] = tpl.get("playbook", "")
-    min_default = settings.policy["runs"].get("default_min_interval_s", 30)
     with db.tx() as conn:
         insert(conn, "orgs", {
             "id": org_id, "parent_org_id": parent_org_id, "name": name, "slug": slug,
             "template": template, "brief": brief, "status": "active", "monthly_cap_micros": cap,
             "settings_json": dumps(settings_json), "created_at": ts, "updated_at": ts,
         })
-        ids: dict[str, str] = {}
-        depths: dict[str, int] = {}
+        rows: dict[str, dict] = {}
         for spec in tpl["agents"]:
-            key = spec["key"]
             parent_key = spec.get("parent")
-            parent_id = ids[parent_key] if parent_key else supervisor_agent_id
-            depth = depths[parent_key] + 1 if parent_key else 0
-            aid = new_id("ag")
-            ids[key], depths[key] = aid, depth
-            wake = spec.get("wake_interval_s")
-            insert(conn, "agents", {
-                "id": aid, "org_id": org_id, "parent_agent_id": parent_id, "role": spec["role"],
-                "name": spec.get("name", spec["role"]), "system_prompt": spec.get("prompt", "").strip(),
-                "model_tier": spec.get("tier", "worker"), "model_override": spec.get("model"),
-                "grants_json": dumps(spec.get("grants", [])), "kpi_json": dumps(spec.get("kpi", {})),
-                "budget_micros": usd_to_micros(spec.get("budget_usd", 0)), "depth": depth,
-                "status": "active", "wake_interval_s": wake,
-                "min_interval_s": spec.get("min_interval_s", min_default),
-                "next_wake_at": iso_in(wake) if wake else None, "wake_requested_at": None,
-                "last_run_at": None, "created_by": created_by, "created_at": ts, "updated_at": ts,
-            })
+            if parent_key:
+                parent_id, depth = rows[parent_key]["id"], rows[parent_key]["depth"] + 1
+            elif spec.get("reports_to_owner"):
+                parent_id, depth = None, 0
+            else:
+                parent_id, depth = supervisor_agent_id, 0
+            row = agent_row(settings, spec=spec, org_id=org_id, parent_id=parent_id, depth=depth,
+                            created_by=created_by, ts=ts)
+            insert(conn, "agents", row)
+            rows[spec["key"]] = row
         actor = created_by if created_by in ("human", "system") else "agent"
         log_event(conn, actor_kind=actor, kind="spawn",
                   action="create_org", org_id=org_id,
                   agent_id=None if created_by in ("human", "system", "template") else created_by,
                   args={"template": template, "name": name, "cap_micros": cap},
-                  result={"agents": list(ids)}, outcome="ok", ref_type="org", ref_id=org_id)
+                  result={"agents": [f"{r['name']} ({r['role']})" for r in rows.values()]}, outcome="ok",
+                  ref_type="org", ref_id=org_id)
+    ceo = org_ceo(db, org_id)
+    if kickoff and ceo:
+        post_message(db, settings, org_id=org_id, sender_kind="system", sender_id=None, recipient_kind="agent",
+                     recipient_id=ceo["id"], type="instruction", body=KICKOFF.format(name=name))
     return org_id
+
+
+# ---------------------------------------------------------------- hiring and retiring
+
+def _subtree_size(db: Database, org_id: str) -> int:
+    return int(db.scalar("SELECT COUNT(*) AS n FROM agents WHERE org_id = ? AND status != 'retired'", (org_id,)) or 0)
+
+
+def spawn_agent(db: Database, settings: Settings, *, hirer: dict, role: str, name: str | None = None,
+                budget_usd: float = 0, focus: str = "", tier: str | None = None) -> dict:
+    """Hire a report under `hirer`. The budget comes out of the hirer's own budget, so children can never
+    exceed their parent. Limits: org headcount, tree depth, reports per manager."""
+    from . import ledger
+    from .util import month_start
+    role_def = settings.role(role)
+    org = get_org(db, hirer["org_id"])
+    limits = loads(org["settings_json"], {}) or {}
+    max_agents, max_depth, max_reports = (int(limits.get("max_agents", 12)), int(limits.get("max_depth", 4)),
+                                          int(limits.get("max_reports", 6)))
+    if _subtree_size(db, org["id"]) >= max_agents:
+        raise PolicyRefusal("spawn.max_agents", f"org already has {max_agents} agents; retire or restructure first")
+    if hirer["depth"] + 1 >= max_depth:
+        raise PolicyRefusal("spawn.max_depth", f"max tree depth is {max_depth}")
+    n_reports = int(db.scalar("SELECT COUNT(*) AS n FROM agents WHERE parent_agent_id = ? AND status != 'retired'",
+                              (hirer["id"],)) or 0)
+    if n_reports >= max_reports:
+        raise PolicyRefusal("spawn.max_reports", f"you already have {max_reports} reports")
+    amount = usd_to_micros(budget_usd)
+    if amount <= 0:
+        raise PolicyRefusal("spawn.budget", "give the new agent a budget (budget_usd > 0) from your own budget")
+    spent = ledger.spent(db, since=month_start(), agent_id=hirer["id"])
+    available = hirer["budget_micros"] - spent
+    if amount > available - usd_to_micros(1):
+        raise PolicyRefusal("spawn.budget", f"you have ${available / 1e6:.2f} left this month and must keep $1 for yourself")
+    hirer_grants = set(grants(hirer))
+    role_grants = list(role_def.get("grants", []))
+    # A hire never gets money or platform access its manager doesn't have.
+    granted = [g for g in role_grants if g not in ("money", "platform_read", "audit") or g in hirer_grants]
+    spec = {"role": role, "name": name or role_def.get("title"), "budget_usd": budget_usd, "focus": focus,
+            "grants": granted}
+    if tier:
+        spec["tier"] = tier
+    ts = iso()
+    row = agent_row(settings, spec=spec, org_id=org["id"], parent_id=hirer["id"], depth=hirer["depth"] + 1,
+                    created_by=hirer["id"], ts=ts)
+    with db.tx() as conn:
+        conn.execute("UPDATE agents SET budget_micros = budget_micros - ?, updated_at = ? WHERE id = ?",
+                     (amount, ts, hirer["id"]))
+        insert(conn, "agents", row)
+    return row
+
+
+def retire_agent(db: Database, *, actor: dict | None, agent_id: str, reason: str) -> dict:
+    """Retire an agent. Its unspent budget returns to its manager, its open tasks and reports move up."""
+    target = get_agent(db, agent_id)
+    if not target or target["status"] == "retired":
+        raise PolicyRefusal("retire.missing", "no such active agent")
+    if actor is not None and not is_descendant(db, agent_id, actor["id"]):
+        raise PolicyRefusal("retire.scope", "you can only retire agents below you")
+    if target["depth"] == 0:
+        raise PolicyRefusal("retire.ceo", "an org's CEO can only be retired by the owner")
+    parent = target["parent_agent_id"]
+    ts = iso()
+    with db.tx() as conn:
+        conn.execute("UPDATE agents SET status = 'retired', wake_requested_at = NULL, next_wake_at = NULL, "
+                     "budget_micros = 0, updated_at = ? WHERE id = ?", (ts, agent_id))
+        if parent:
+            conn.execute("UPDATE agents SET budget_micros = budget_micros + ?, updated_at = ? WHERE id = ?",
+                         (target["budget_micros"], ts, parent))
+            conn.execute("UPDATE agents SET parent_agent_id = ?, depth = depth - 1, updated_at = ? "
+                         "WHERE parent_agent_id = ?", (parent, ts, agent_id))
+            conn.execute("UPDATE tasks SET assignee_id = ?, updated_at = ? WHERE assignee_id = ? "
+                         "AND status IN ('open','in_progress','blocked')", (parent, ts, agent_id))
+            conn.execute("UPDATE goals SET owner_agent_id = ?, updated_at = ? WHERE owner_agent_id = ? "
+                         "AND status IN ('active','at_risk')", (parent, ts, agent_id))
+            conn.execute("UPDATE agents SET wake_requested_at = COALESCE(wake_requested_at, ?) WHERE id = ?",
+                         (ts, parent))
+    return {**target, "status": "retired", "reason": reason}
 
 
 def org_tree(db: Database, org_id: str) -> list[dict]:

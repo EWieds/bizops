@@ -87,4 +87,4 @@ def tools_for(grants: list[str]) -> list[Tool]:
 
 
 def load_all() -> None:
-    from . import comms, files, memory, money, platform, web  # noqa: F401
+    from . import audit, comms, files, goals, hiring, memory, money, platform, web  # noqa: F401

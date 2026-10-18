@@ -1,37 +1,53 @@
-{% extends "base.html" %}{% from "_macros.html" import pause_btn, card %}
+{% extends "base.html" %}{% from "_macros.html" import pause_btn, card, bar, goal_line %}
 {% block body %}
-<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+<div class="flex items-end justify-between mb-4"><div><h1 class="text-2xl font-semibold">Overview</h1>
+<div class="text-slate-500">{{ orgs|length - 1 }} business{{ 'es' if orgs|length != 2 }} under the holding company · {{ totals.agents }} agents</div></div>
+<a href="/new" class="px-3 py-2 rounded-md bg-slate-900 text-white">+ New business</a></div>
+<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
   {% set m = totals %}
-  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Spend this month</div><div class="text-xl font-semibold">{{ m.month|usd }}</div><div class="text-xs text-slate-500">cap {{ m.monthly_cap|usd }} · ceiling {{ m.ceiling|usd }}</div></div>
-  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Spend today</div><div class="text-xl font-semibold">{{ m.day|usd }}</div><div class="text-xs text-slate-500">daily cap {{ m.daily_cap|usd }}</div></div>
-  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Orgs</div><div class="text-xl font-semibold">{{ orgs|length }}</div></div>
-  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Runs today</div><div class="text-xl font-semibold">{{ m.runs_today }}</div><div class="text-xs text-slate-500">{{ m.running }} running now</div></div>
-  <div class="bg-white rounded-lg border p-3"><div class="text-slate-500 text-xs">Needs a human</div><div class="text-xl font-semibold"><a href="/queue" class="underline">{{ open_queue }}</a></div></div>
+  <div class="card !mb-0"><div class="text-slate-500 text-xs">Spend this month</div><div class="text-2xl font-semibold">{{ m.month|usd }}</div><div class="mt-1">{{ bar(m.month, m.monthly_cap) }}</div><div class="text-xs text-slate-500 mt-1">cap {{ m.monthly_cap|usd }} · ceiling {{ m.ceiling|usd }}</div></div>
+  <div class="card !mb-0"><div class="text-slate-500 text-xs">Spend today</div><div class="text-2xl font-semibold">{{ m.day|usd }}</div><div class="mt-1">{{ bar(m.day, m.daily_cap) }}</div><div class="text-xs text-slate-500 mt-1">daily cap {{ m.daily_cap|usd }}</div></div>
+  <div class="card !mb-0"><div class="text-slate-500 text-xs">Verified revenue (month)</div><div class="text-2xl font-semibold">{{ m.revenue|usd }}</div><div class="text-xs text-slate-500 mt-1">connectors or owner only</div></div>
+  <div class="card !mb-0"><div class="text-slate-500 text-xs">Goals</div><div class="text-2xl font-semibold">{{ m.goals_active }}<span class="text-sm text-slate-500"> active</span></div><div class="text-xs mt-1"><span class="text-amber-700">{{ m.goals_risk }} at risk</span> · <span class="text-green-700">{{ m.goals_done }} achieved</span></div></div>
+  <div class="card !mb-0"><div class="text-slate-500 text-xs">Needs you</div><div class="text-2xl font-semibold"><a href="/queue" class="hover:underline">{{ open_queue }}</a></div><div class="text-xs text-slate-500 mt-1">{{ open_findings }} open audit finding{{ 's' if open_findings != 1 }}</div></div>
 </div>
-{% call card("Orgs") %}
-<div class="overflow-x-auto"><table class="w-full">
-<thead class="text-left text-slate-500 text-xs"><tr><th></th><th>Org</th><th>Status</th><th>Agents</th><th>Open / blocked tasks</th><th>Spend (month) / cap</th><th>Verified revenue</th><th>Wallet</th><th>Policy flags</th><th></th></tr></thead>
-<tbody>
-{% for o in orgs %}
-<tr class="border-t">
-  <td title="{{ o.health_reasons|join(', ') }}"><span class="dot dot-{{ o.health }}"></span></td>
-  <td class="py-1"><a class="font-medium underline" href="/orgs/{{ o.id }}">{{ o.name }}</a>{% if not o.parent_org_id %} <span class="pill bg-slate-200">platform</span>{% endif %}<div class="text-xs text-slate-500">{{ o.template }} · {{ o.health_reasons|join(', ') }}</div></td>
-  <td>{{ o.status }}</td><td>{{ o.agents }}</td><td>{{ o.open_tasks }} / {{ o.blocked }}</td>
-  <td>{{ o.spent|usd }} / {{ o.monthly_cap_micros|usd }}
-    <div class="h-1 bg-slate-200 rounded w-24"><div class="h-1 rounded {{ 'bg-red-500' if o.monthly_cap_micros and o.spent > 0.9*o.monthly_cap_micros else 'bg-slate-600' }}" style="width: {{ [100, (100*o.spent/(o.monthly_cap_micros or 1))]|min }}%"></div></div></td>
-  <td>{{ o.revenue|usd }}</td><td>{{ o.wallet|usd }}</td><td>{{ o.flags }}</td>
-  <td class="whitespace-nowrap">{% if o.ceo %}<a class="text-xs underline mr-2" href="/chat?agent={{ o.ceo.id }}">chat CEO</a>{% endif %}{{ pause_btn('org', o.id, o.status) }}</td>
-</tr>
-{% endfor %}
-</tbody></table></div>
-{% endcall %}
-{% call card("Spend per day (all orgs, USD)") %}
-<canvas id="spend" height="70"></canvas>
-<script>
-new Chart(document.getElementById('spend'), {type: 'bar',
-  data: {labels: {{ days|map(attribute='d')|list|tojson }}, datasets: [{label: 'USD', data: {{ days|map(attribute='usd')|list|tojson }}, backgroundColor: '#334155'}]},
-  options: {plugins: {legend: {display: false}}, scales: {y: {beginAtZero: true}}}});
-</script>
-{% endcall %}
-<div class="text-xs text-slate-500">Revenue is shown only from connectors or the owner. Agents cannot write it.</div>
+<div class="grid lg:grid-cols-3 gap-4">
+<div class="lg:col-span-2">
+  {% for o in orgs %}
+  <section class="card">
+    <div class="flex items-center gap-2 mb-2">
+      <span class="dot dot-{{ o.health }}" title="{{ o.health_reasons|join(', ') }}"></span>
+      <a class="text-base font-semibold hover:underline" href="/orgs/{{ o.id }}">{{ o.name }}</a>
+      {% if not o.parent_org_id %}<span class="pill o-muted">holding company</span>{% else %}<span class="pill o-muted">{{ o.template }}</span>{% endif %}
+      <span class="text-xs text-slate-500">{{ o.status }}{% if o.health_reasons %} · {{ o.health_reasons|join(', ') }}{% endif %}</span>
+      <span class="flex-1"></span>
+      {% if o.ceo %}<a class="text-xs px-2 py-0.5 rounded-md border hover:bg-slate-50" href="/chat?agent={{ o.ceo.id }}">chat CEO</a>{% endif %}{{ pause_btn('org', o.id, o.status) }}
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs mb-2">
+      <div><div class="text-slate-500">Spend / cap</div><div class="font-medium">{{ o.spent|usd }} / {{ o.monthly_cap_micros|usd }}</div>{{ bar(o.spent, o.monthly_cap_micros) }}</div>
+      <div><div class="text-slate-500">Revenue</div><div class="font-medium">{{ o.revenue|usd }}</div></div>
+      <div><div class="text-slate-500">Wallet</div><div class="font-medium">{{ o.wallet|usd }}</div></div>
+      <div><div class="text-slate-500">Team</div><div class="font-medium">{{ o.agents }} agents</div></div>
+      <div><div class="text-slate-500">Tasks</div><div class="font-medium">{{ o.open_tasks }} open · {{ o.blocked }} blocked · {{ o.done_tasks }} done</div></div>
+    </div>
+    {% if o.goals %}<div class="space-y-1.5 border-t pt-2">{% for g in o.goals %}{{ goal_line(g) }}{% endfor %}</div>
+    {% else %}<div class="text-xs text-slate-500 border-t pt-2">No goals yet: the CEO sets them at kickoff.</div>{% endif %}
+  </section>
+  {% endfor %}
+  {% call card("Spend per day (all businesses)") %}<canvas id="spend" height="70"></canvas>
+  <script>new Chart(document.getElementById('spend'),{type:'bar',data:{labels:{{ days|map(attribute='d')|list|tojson }},datasets:[{data:{{ days|map(attribute='usd')|list|tojson }},backgroundColor:'#334155',borderRadius:3}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{callback:v=>'$'+v}}}}});</script>{% endcall %}
+</div>
+<div>
+  <section class="card"><h2><span class="dot dot-green live"></span> Live <a href="/activity" class="ml-auto text-xs font-normal underline">full log</a></h2>
+    <div hx-get="/live" hx-trigger="load, every 4s" hx-swap="innerHTML"></div></section>
+  {% call card("Latest from your CEOs") %}
+    {% for m in replies %}<a href="/chat?agent={{ m.sender_id }}" class="block border-t py-1.5 hover:bg-slate-50"><div class="text-xs text-slate-500">{{ m.sender_name }} · {{ m.org_name }} · {{ m.created_at|ago }}</div><div class="line-clamp-3">{{ m.body[:260] }}</div></a>
+    {% else %}<div class="text-xs text-slate-500">No messages yet.</div>{% endfor %}
+  {% endcall %}
+  {% call card("Audit findings") %}
+    {% for f in findings %}<div class="border-t py-1.5 text-xs"><span class="pill sev-{{ f.severity }}">{{ f.severity }}</span> {{ f.summary[:160] }}</div>
+    {% else %}<div class="text-xs text-slate-500">No open findings.</div>{% endfor %}
+    <a href="/audit" class="text-xs underline">all findings</a>
+  {% endcall %}
+</div></div>
 {% endblock %}

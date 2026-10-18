@@ -63,3 +63,13 @@ web:
   cache_ttl_s: 900
   blocked_domains: []
   search_provider: auto         # auto | anthropic | brave | dry_run
+
+# Background loops (code only, no model cost unless they wake an agent).
+heartbeats:
+  maintenance_every_s: 30       # how often the maintenance jobs are checked
+  stall_hours: 6                # an open task untouched this long gets its assignee nudged
+  escalate_after_nudges: 2      # then the delegator is told
+  budget_alert_pct: 80          # org CEO + CFO are told once a day when spend passes this % of cap
+  digest_hour_utc: 13           # the platform CEO sends the owner a daily digest after this hour
+  daily_review_hours: 24        # managers get at least one review run per this many hours
+  audit_every_s: 3600           # code-level audit checks (loops, cost anomalies, unsupported claims)

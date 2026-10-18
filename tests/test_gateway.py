@@ -86,3 +86,12 @@ async def test_tool_spend_recorded(core, org):
     r = await invoke(ctx(core, org["researcher"]), "web_search", {"query": "lawn care"})
     assert r.ok and "untrusted_web_content" in r.content
     assert ledger.spent(core.db, since="2000", agent_id=org["researcher"]["id"]) == 10_000
+
+
+async def test_read_artifact_by_name(core, org):
+    c = Ctx(core=core, agent=org["marketer"])
+    assert (await invoke(c, "write_artifact", {"name": "site-pack-v1.md", "content": "spec"})).ok
+    r = await invoke(Ctx(core=core, agent=org["writer"]), "read_artifact", {"artifact_id": "site-pack-v1.md"})
+    assert r.ok and r.content == "spec"
+    r = await invoke(Ctx(core=core, agent=org["writer"]), "list_artifacts", {"name_contains": "site"})
+    assert r.ok and "site-pack-v1.md" in r.content

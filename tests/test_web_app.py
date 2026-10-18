@@ -27,7 +27,7 @@ def test_pages_render(core, seeded, client):
     art = core.db.one("SELECT id FROM artifacts")
     for url in ["/", f"/orgs/{seeded['demo']}", f"/agents/{agent['id']}", "/activity", "/activity?outcome=refused&q=pay",
                 "/activity/rows", f"/events/{ev['id']}", "/chat", "/queue", "/money", "/new", f"/artifacts/{art['id']}",
-                "/healthz"]:
+                "/healthz", "/goals", "/audit", "/system", "/live", f"/agents/{agent['id']}/prompt"]:
         assert client.get(url).status_code == 200, url
 
 
@@ -96,3 +96,14 @@ def test_explain_routes_to_platform_ceo(core, seeded, client):
     r = client.post("/explain", data={"event_id": ev["id"]}, follow_redirects=False)
     assert r.status_code == 303 and "/chat?agent=" in r.headers["location"]
     assert core.db.scalar("SELECT COUNT(*) AS n FROM messages WHERE body LIKE ?", (f"%{ev['id']}%",)) == 1
+
+
+def test_goal_measure_and_finding_resolve(core, seeded, client):
+    g = core.db.one("SELECT id FROM goals")
+    client.post(f"/goals/{g['id']}/measure", data={"value": "7"})
+    assert core.db.scalar("SELECT measured_value FROM goals WHERE id = ?", (g["id"],)) == 7
+    from bizops.maintenance import _finding
+    _finding(core.db, kind="other", severity="low", summary="x", evidence="y", dedupe="t1")
+    fid = core.db.scalar("SELECT id FROM audit_findings")
+    client.post(f"/audit/{fid}/resolve")
+    assert core.db.scalar("SELECT status FROM audit_findings WHERE id = ?", (fid,)) == "resolved"

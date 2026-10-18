@@ -1,41 +1,55 @@
-{% extends "base.html" %}{% from "_macros.html" import pause_btn, card %}
+{% extends "base.html" %}{% from "_macros.html" import pause_btn, card, bar, goal_line, status %}
 {% macro node(a) %}
-<li class="ml-4 mt-1">
-  <a href="/agents/{{ a.id }}" class="underline font-medium {{ 'text-slate-400' if a.status != 'active' }}">{{ a.name }}</a>
-  <span class="text-xs text-slate-500">{{ a.role }} · {{ a.model_tier }} · {{ (spend.get(a.id) or 0)|usd }} / {{ a.budget_micros|usd }} · last run {{ a.last_run_at|ago }}</span>
-  {% if a.status != 'active' %}<span class="pill o-refused">{{ a.status }}</span>{% endif %}
-  {% if a.children %}<ul class="border-l border-slate-200">{% for c in a.children %}{{ node(c) }}{% endfor %}</ul>{% endif %}
+<li>
+  <a href="/agents/{{ a.id }}" class="inline-block text-left bg-white border {{ 'border-slate-300' if a.status == 'active' else 'border-dashed border-slate-300 opacity-60' }} rounded-lg px-3 py-2 shadow-sm hover:border-slate-500 min-w-[150px] max-w-[190px]">
+    <div class="flex items-center gap-1.5">{% if a.id in running %}<span class="dot dot-green live"></span>{% endif %}<span class="font-semibold truncate">{{ a.name }}</span></div>
+    <div class="text-[11px] text-slate-500 truncate">{{ a.title or a.role }}</div>
+    <div class="text-[11px] text-slate-500">{{ a.model_tier }} · {{ (spend.get(a.id) or 0)|usd }}/{{ a.budget_micros|usd }}</div>
+    <div class="text-[11px] text-slate-400">ran {{ a.last_run_at|ago }}{% if a.status != 'active' %} · {{ a.status }}{% endif %}</div>
+  </a>
+  {% if a.children %}<ul>{% for c in a.children %}{{ node(c) }}{% endfor %}</ul>{% endif %}
 </li>
 {% endmacro %}
+{% macro goal_tree(g) %}
+<div class="py-1">{{ goal_line(g) }}
+{% if g.children %}<div class="ml-5 pl-3 border-l border-slate-200">{% for c in g.children %}{{ goal_tree(c) }}{% endfor %}</div>{% endif %}</div>
+{% endmacro %}
 {% block body %}
-<div class="flex items-center gap-3 mb-3">
-  <span class="dot dot-{{ org.health }}"></span><h1 class="text-xl font-semibold">{{ org.name }}</h1>
-  <span class="text-slate-500">{{ org.template }} · {{ org.status }}</span>{{ pause_btn('org', org.id, org.status) }}
-  <a class="underline text-xs" href="/activity?org={{ org.id }}">activity</a>
+<div class="flex flex-wrap items-center gap-3 mb-4">
+  <span class="dot dot-{{ org.health }}"></span><h1 class="text-2xl font-semibold">{{ org.name }}</h1>
+  <span class="pill o-muted">{{ org.template }}</span><span class="text-slate-500">{{ org.status }}</span>
+  {{ pause_btn('org', org.id, org.status) }}
+  <span class="flex-1"></span>
+  {% if ceo %}<a class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs" href="/chat?agent={{ ceo.id }}">Chat with the CEO</a>{% endif %}
+  <a class="px-3 py-1.5 rounded-md border text-xs" href="/activity?org={{ org.id }}">Activity</a>
 </div>
-<div class="grid md:grid-cols-3 gap-4">
-<div class="md:col-span-2">
-{% call card("Org chart") %}<ul class="-ml-4">{% for a in tree %}{{ node(a) }}{% endfor %}</ul>{% endcall %}
-{% call card("Tasks") %}
-<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Task</th><th>Assignee</th><th>Status</th><th>Updated</th></tr></thead><tbody>
-{% for t in tasks %}<tr class="border-t align-top"><td class="py-1">{{ t.title }}<div class="text-xs text-slate-500">deliverable: {{ t.deliverable }}{% if t.result %} · result: {{ t.result[:160] }}{% endif %}{% if t.blocked_reason %} · <span class="text-violet-700">{{ t.blocked_reason }}</span>{% endif %}</div></td>
-<td>{{ t.assignee }}</td><td><span class="pill {{ 'o-hard_stop' if t.status == 'blocked' else 'o-ok' if t.status == 'done' else 'o-pending' }}">{{ t.status }}</span></td><td class="text-xs">{{ t.updated_at|ago }}</td></tr>{% else %}<tr><td class="text-slate-500">No tasks yet.</td></tr>{% endfor %}
-</tbody></table>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs">
+  <div class="card !mb-0"><div class="text-slate-500">Spend this month</div><div class="text-lg font-semibold">{{ spent|usd }} <span class="text-slate-400 text-xs">/ {{ org.monthly_cap_micros|usd }}</span></div>{{ bar(spent, org.monthly_cap_micros) }}</div>
+  <div class="card !mb-0"><div class="text-slate-500">Wallet</div><div class="text-lg font-semibold">{{ wallet|usd }}</div><a href="/money" class="underline">fund</a></div>
+  <div class="card !mb-0"><div class="text-slate-500">Team</div><div class="text-lg font-semibold">{{ headcount }} / {{ settings_json.max_agents }}</div><div class="text-slate-500">max depth {{ settings_json.max_depth }}</div></div>
+  <div class="card !mb-0"><div class="text-slate-500">Health</div><div class="text-lg font-semibold capitalize">{{ org.health }}</div><div class="text-slate-500">{{ org.health_reasons|join(', ') or 'all clear' }}</div></div>
+</div>
+{% call card("Org chart") %}<div class="tree overflow-x-auto pb-2"><ul>{% for a in tree %}{{ node(a) }}{% endfor %}</ul></div>{% endcall %}
+<div class="grid lg:grid-cols-3 gap-4">
+<div class="lg:col-span-2">
+{% call card("Goals") %}{% for g in goal_roots %}{{ goal_tree(g) }}{% else %}<div class="text-slate-500 text-xs">No goals yet. The CEO sets them at kickoff and reviews them on a cadence.</div>{% endfor %}{% endcall %}
+{% call card("Task board") %}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+{% for col, label in [('open', 'To do'), ('in_progress', 'In progress'), ('blocked', 'Blocked'), ('done', 'Done')] %}
+<div class="bg-slate-50 rounded-lg p-2"><div class="text-xs font-semibold text-slate-600 mb-1">{{ label }} · {{ board[col]|length }}</div>
+{% for t in board[col][:12] %}<div class="bg-white border rounded-md p-2 mb-1.5 text-xs"><div class="font-medium">{{ t.title[:90] }}</div><div class="text-slate-500">{{ t.assignee }} · {{ t.updated_at|ago }}</div>
+{% if t.blocked_reason %}<div class="text-violet-700 mt-0.5">{{ t.blocked_reason[:120] }}</div>{% elif t.result and col == 'done' %}<div class="text-slate-600 mt-0.5">{{ t.result[:120] }}</div>{% endif %}</div>{% endfor %}
+</div>{% endfor %}
+</div>
 {% endcall %}
 </div>
 <div>
-{% call card("Budget") %}
-<div>Spend this month: <b>{{ spent|usd }}</b> of {{ org.monthly_cap_micros|usd }}</div>
-<div>Wallet: <b>{{ wallet|usd }}</b> <a class="underline text-xs" href="/money">fund</a></div>
-<div class="text-xs text-slate-500 mt-1">Limits: max agents {{ settings_json.max_agents }}, depth {{ settings_json.max_depth }}</div>
-{% if org.health_reasons %}<div class="text-xs mt-1">Health: {{ org.health_reasons|join(', ') }}</div>{% endif %}
-{% endcall %}
-{% call card("Brief") %}<pre class="text-xs">{{ org.brief or '(none)' }}</pre>{% endcall %}
-{% call card("Artifacts") %}
-{% for a in artifacts %}<div><a class="underline" href="/artifacts/{{ a.id }}">{{ a.name }}</a> <span class="text-xs text-slate-500">{{ a.agent }} · {{ a.created_at|ago }}</span></div>{% else %}<div class="text-slate-500">None yet.</div>{% endfor %}
+{% call card("Owner's brief") %}<pre class="text-xs text-slate-700">{{ org.brief or '(none)' }}</pre>{% endcall %}
+{% call card("Files produced") %}
+{% for a in artifacts %}<div class="py-0.5"><a class="underline" href="/artifacts/{{ a.id }}">{{ a.name }}</a> <span class="text-xs text-slate-500">{{ a.agent }} · {{ a.created_at|ago }}</span></div>{% else %}<div class="text-slate-500 text-xs">None yet.</div>{% endfor %}
 {% endcall %}
 {% call card("Knowledge base") %}
-{% for k in kb %}<details><summary>{{ k.key }}</summary><pre class="text-xs">{{ k.body }}</pre></details>{% else %}<div class="text-slate-500">Empty.</div>{% endfor %}
+{% for k in kb %}<details class="py-0.5"><summary class="cursor-pointer">{{ k.key }}</summary><pre class="text-xs">{{ k.body }}</pre></details>{% else %}<div class="text-slate-500 text-xs">Empty.</div>{% endfor %}
 {% endcall %}
 </div></div>
 {% endblock %}

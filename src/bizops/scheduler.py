@@ -12,9 +12,11 @@ import logging
 from datetime import timedelta
 
 from .core import Core
-from .engine import expire_messages, platform_paused
+from .engine import get_agent, platform_paused
+from .events import log_event
+from .maintenance import heartbeat_needed, run_jobs
 from .runtime import run_agent
-from .util import iso, now, parse_iso
+from .util import iso, iso_in, now, parse_iso
 
 log = logging.getLogger("bizops.scheduler")
 
@@ -28,7 +30,7 @@ class Scheduler:
         self.running: dict[str, asyncio.Task] = {}
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
-        self._last_sweep = 0.0
+        self._last_sweep = -1e9
 
     def poke(self) -> None:
         self._wake.set()
@@ -55,13 +57,37 @@ class Scheduler:
             out.append((r["id"], "message" if r["wake_requested_at"] else "timer"))
         return out
 
-    async def tick(self) -> int:
+    def maintenance(self) -> None:
         loop = asyncio.get_running_loop()
-        if loop.time() - self._last_sweep > 30:
-            expire_messages(self.core.db)
+        every = float(self.core.settings.policy.get("heartbeats", {}).get("maintenance_every_s", 30))
+        if loop.time() - self._last_sweep >= every:
             self._last_sweep = loop.time()
+            if not platform_paused(self.core.db):
+                run_jobs(self.core.db, self.core.settings)
+
+    def skip_heartbeat(self, agent_id: str) -> bool:
+        """Timer wake with nothing to act on: reschedule for free instead of running the model."""
+        db = self.core.db
+        agent = get_agent(db, agent_id)
+        if not agent:
+            return True
+        needed, why = heartbeat_needed(db, self.core.settings, agent)
+        if needed:
+            return False
+        db.execute("UPDATE agents SET next_wake_at = ?, last_heartbeat_skip_at = ? WHERE id = ?",
+                   (iso_in(agent["wake_interval_s"] or 3600), iso(), agent_id))
+        log_event(db, actor_kind="scheduler", kind="wake", action="heartbeat.skip", org_id=agent["org_id"],
+                  agent_id=agent_id, result={"why": why}, outcome="ok")
+        return True
+
+    async def tick(self) -> int:
+        self.maintenance()
         started = 0
         for agent_id, reason in self.due_agents():
+            if reason == "timer":
+                if self.skip_heartbeat(agent_id):
+                    continue
+                reason = "heartbeat"
             self.running[agent_id] = asyncio.create_task(self._run(agent_id, reason))
             started += 1
         return started

@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% from "_macros.html" import card, outcome %}
+{% block body %}
+<h1 class="text-2xl font-semibold mb-4">System</h1>
+<div class="grid lg:grid-cols-3 gap-4">
+<div class="lg:col-span-2">
+{% call card("Heartbeats: who wakes next") %}
+<p class="text-xs text-slate-500 mb-2">Agents wake on messages and tasks, and on their own heartbeat to review goals and check on work. A heartbeat with nothing to act on is skipped for free.</p>
+<table class="w-full text-xs"><thead class="text-left text-slate-500"><tr><th>Agent</th><th>Org</th><th>Every</th><th>Next</th><th>Last run</th><th>Last skip</th><th>Pending wake</th></tr></thead><tbody>
+{% for a in agents %}<tr class="border-t"><td class="py-1"><a class="underline" href="/agents/{{ a.id }}">{{ a.name }}</a>{% if a.id in running %} <span class="dot dot-green live"></span>{% endif %}</td><td>{{ a.org }}</td><td>{{ a.wake_interval_s|dur if a.wake_interval_s else 'events only' }}</td>
+<td>{{ a.next_wake_at|ago if a.next_wake_at else '-' }}</td><td>{{ a.last_run_at|ago }}</td><td>{{ a.last_heartbeat_skip_at|ago }}</td><td>{{ 'yes' if a.wake_requested_at else '' }}</td></tr>{% endfor %}
+</tbody></table>
+{% endcall %}
+{% call card("Background jobs (recent)") %}
+{% for e in jobs %}<div class="border-t py-1 text-xs flex gap-2"><span class="text-slate-400 w-32">{{ e.ts[5:19].replace('T', ' ') }}</span><code>{{ e.action }}</code><span class="text-slate-600 flex-1 truncate">{{ e.result_json or '' }}</span></div>{% else %}<div class="text-xs text-slate-500">No jobs have acted yet.</div>{% endfor %}
+{% endcall %}
+</div>
+<div>
+{% call card("Model access") %}
+<div class="text-xs space-y-1"><div>Backend: <b>{{ backend_label }}</b></div><div class="text-slate-500">{{ backend_why }}</div>
+{% for tier, model in tiers.items() %}<div>{{ tier }}: <code>{{ model }}</code></div>{% endfor %}
+<div>Web search: <b>{{ search_provider }}</b></div><div>Payments: <b>{{ payments }}</b></div>
+<div>Jev approver: <b>{{ 'connected' if jev else 'not configured (rules + LLM approver active)' }}</b></div></div>
+{% endcall %}
+{% call card("Scheduler") %}
+<div class="text-xs space-y-1"><div>Running now: <b>{{ running|length }}</b> / {{ limits.max_concurrent_runs }}</div>
+<div>Last maintenance tick: {{ last_tick|ago }}</div><div>Per run: {{ limits.max_turns }} turns, {{ limits.max_tokens_per_run }} tokens</div></div>
+{% endcall %}
+{% call card("Guardrails") %}
+<div class="text-xs space-y-1">
+<div>Platform caps: {{ caps.monthly|usd }}/month, {{ caps.daily|usd }}/day, ceiling {{ caps.ceiling|usd }}</div>
+<div>Payments: max ${{ money.per_payment_max_usd }} each, ${{ money.daily_payments_max_usd_per_org }}/day per business</div>
+<div>Messages: max {{ msgs.max_hops }} hops, expire after {{ msgs.ttl_hours }}h</div>
+<div>Hard stops: {{ hard_stops|join(', ') }}</div>
+<div class="text-slate-500">Edit config/policy.yaml to change these. Agents can't.</div></div>
+{% endcall %}
+</div></div>
+{% endblock %}

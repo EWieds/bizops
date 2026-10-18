@@ -6,10 +6,17 @@ Read ARCHITECTURE.md first. PLAN.md has the milestone plan and schema.
 - Install: `uv venv && uv pip install -e '.[dev]'` (or `pip install -e '.[dev]'`)
 - Tests: `.venv/bin/python -m pytest -q`
 - Server, no tokens spent: `.venv/bin/bizops serve --dry-run` -> http://127.0.0.1:8000
-- Server, live: put ANTHROPIC_API_KEY in .env, then `.venv/bin/bizops serve`
+- Server, live: `.venv/bin/bizops serve` (auto-detects model access: API key -> Claude login via `claude` CLI -> dry run)
+- Background service: `bizops install-service` (systemd/launchd/Windows task); one-shot setup: `bash scripts/install.sh`
+- Run background jobs once: `bizops maintain`
 - Run the scheduler until idle (no server): `.venv/bin/bizops tick --dry-run`
 - Kill switches: `bizops pause all|org <id>|agent <id>`, `bizops resume ...`
 - Owner money: `bizops fund <org_id> <usd>`, `bizops payee "<name>" --org <id> --max 25`
+
+## Where things live
+- Expert role personas: config/roles.yaml. Org templates (org charts): config/templates/*.yaml.
+- Harness prompt layers: runtime.system_prompt (stable) + runtime.gather_context (per wake).
+- Background heartbeats: maintenance.py (goal reviews, stalled tasks, budget alerts, digest, audit checks).
 
 ## Rules
 - Every tool and model call goes through `gateway.invoke` / `gateway.model_call`. Never call a tool handler directly.

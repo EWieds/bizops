@@ -1,43 +1,48 @@
-{% extends "base.html" %}{% from "_macros.html" import pause_btn, card %}
+{% extends "base.html" %}{% from "_macros.html" import pause_btn, card, bar, goal_line %}
 {% block body %}
-<div class="flex flex-wrap items-center gap-3 mb-3">
-  <h1 class="text-xl font-semibold">{{ agent.name }}</h1>
-  <span class="text-slate-500">{{ agent.role }} in <a class="underline" href="/orgs/{{ org.id }}">{{ org.name }}</a> · {{ agent.status }}</span>
+<div class="flex flex-wrap items-center gap-3 mb-1">
+  {% if is_running %}<span class="dot dot-green live"></span>{% endif %}
+  <h1 class="text-2xl font-semibold">{{ agent.name }}</h1><span class="text-slate-500">{{ agent.title or agent.role }}</span>
   {{ pause_btn('agent', agent.id, agent.status) }}
-  <form method="post" action="/agents/{{ agent.id }}/wake" class="inline"><button class="text-xs px-2 py-0.5 rounded border">wake now</button></form>
-  {% if agent.depth == 0 %}<a class="underline text-xs" href="/chat?agent={{ agent.id }}">chat</a>{% endif %}
-  <a class="underline text-xs" href="/activity?agent={{ agent.id }}">activity</a>
+  <form method="post" action="/agents/{{ agent.id }}/wake" class="inline"><button class="text-xs px-2 py-0.5 rounded-md border">wake now</button></form>
+  {% if agent.depth == 0 %}<a class="text-xs px-2 py-0.5 rounded-md bg-slate-900 text-white" href="/chat?agent={{ agent.id }}">chat</a>{% endif %}
+  <a class="text-xs underline" href="/activity?agent={{ agent.id }}">activity</a>
 </div>
-<div class="grid md:grid-cols-3 gap-4">
-<div class="md:col-span-2">
+<div class="text-slate-500 mb-4">in <a class="underline" href="/orgs/{{ org.id }}">{{ org.name }}</a> · reports to {% if sup %}<a class="underline" href="/agents/{{ sup.id }}">{{ sup.name }}</a>{% else %}the owner{% endif %} · {{ agent.status }}</div>
+<div class="grid lg:grid-cols-3 gap-4">
+<div class="lg:col-span-2">
+{% call card("Expertise") %}<pre class="text-xs text-slate-700 font-sans">{{ agent.system_prompt }}</pre>
+<button class="text-xs underline mt-2" hx-get="/agents/{{ agent.id }}/prompt" hx-target="#fullprompt">show the full harness prompt and the next wake-up message</button><div id="fullprompt"></div>{% endcall %}
+{% call card("Goals") %}{% for g in goals %}<div class="py-1">{{ goal_line(g) }}</div>{% else %}<div class="text-xs text-slate-500">No goals.</div>{% endfor %}{% endcall %}
 {% call card("Inbox") %}
-{% for m in inbox %}<div class="border-t py-1"><span class="pill o-pending">{{ m.type }}</span> <b>{{ 'owner' if m.sender_kind == 'human' else m.sender_name }}</b> <span class="text-xs text-slate-500">{{ m.created_at|ago }} · hop {{ m.hop }} · {{ m.status }}</span><div class="whitespace-pre-wrap">{{ m.body[:1500] }}</div></div>{% else %}<div class="text-slate-500">Empty.</div>{% endfor %}
-{% endcall %}
-{% call card("Sent") %}
-{% for m in sent %}<div class="border-t py-1"><span class="pill o-pending">{{ m.type }}</span> to <b>{{ 'owner' if m.recipient_kind == 'human' else m.recipient_name }}</b> <span class="text-xs text-slate-500">{{ m.created_at|ago }}</span><div class="whitespace-pre-wrap">{{ m.body[:800] }}</div></div>{% else %}<div class="text-slate-500">Nothing sent.</div>{% endfor %}
+{% for m in inbox %}<div class="border-t py-1.5"><span class="pill o-pending">{{ m.type }}</span> <b>{{ 'owner' if m.sender_kind == 'human' else ('platform' if m.sender_kind == 'system' else m.sender_name) }}</b> <span class="text-xs text-slate-500">{{ m.created_at|ago }} · hop {{ m.hop }} · {{ m.status }}</span><div class="whitespace-pre-wrap text-xs mt-0.5">{{ m.body[:1500] }}</div></div>{% else %}<div class="text-slate-500 text-xs">Empty.</div>{% endfor %}
 {% endcall %}
 {% call card("Runs") %}
-<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Started</th><th>Why</th><th>Status</th><th>Turns</th><th>Tokens</th><th>Cost</th><th>Summary</th></tr></thead><tbody>
-{% for r in runs %}<tr class="border-t align-top"><td class="text-xs whitespace-nowrap"><a class="underline" href="/activity?run={{ r.id }}">{{ r.started_at|ago }}</a></td><td>{{ r.wake_reason }}</td><td>{{ r.status }}</td><td>{{ r.turns }}</td><td class="text-xs">{{ r.input_tokens }} / {{ r.output_tokens }}</td><td>{{ r.cost_micros|usd }}</td><td class="text-xs">{{ (r.summary or r.error or '')[:200] }}</td></tr>{% endfor %}
+<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Started</th><th>Why</th><th>Status</th><th>Turns</th><th>Cost</th><th>Summary</th></tr></thead><tbody>
+{% for r in runs %}<tr class="border-t align-top text-xs"><td class="whitespace-nowrap py-1"><a class="underline" href="/activity?run={{ r.id }}">{{ r.started_at|ago }}</a></td><td>{{ r.wake_reason }}</td><td>{{ r.status }}</td><td>{{ r.turns }}</td><td>{{ r.cost_micros|usd }}</td><td>{{ (r.summary or r.error or '')[:240] }}</td></tr>{% endfor %}
 </tbody></table>
+{% endcall %}
+{% call card("Sent") %}
+{% for m in sent %}<div class="border-t py-1.5 text-xs"><span class="pill o-pending">{{ m.type }}</span> to <b>{{ 'owner' if m.recipient_kind == 'human' else m.recipient_name }}</b> <span class="text-slate-500">{{ m.created_at|ago }}</span><div class="whitespace-pre-wrap">{{ m.body[:800] }}</div></div>{% else %}<div class="text-slate-500 text-xs">Nothing sent.</div>{% endfor %}
 {% endcall %}
 </div>
 <div>
-{% call card("Profile") %}
-<div>Model tier: <b>{{ agent.model_tier }}</b>{% if agent.model_override %} ({{ agent.model_override }}){% endif %}</div>
-<div>Budget: {{ spent|usd }} / {{ agent.budget_micros|usd }} this month</div>
-<div>Grants: {{ grants|join(', ') }}</div>
-<div>KPIs: <code class="text-xs">{{ kpi|tojson }}</code></div>
-<div>Wake: {{ 'every %ss'|format(agent.wake_interval_s) if agent.wake_interval_s else 'on events' }} · min interval {{ agent.min_interval_s }}s</div>
-<div>Supervisor: {% if sup %}<a class="underline" href="/agents/{{ sup.id }}">{{ sup.name }}</a>{% else %}owner{% endif %}</div>
+{% call card("Seat") %}
+<div class="space-y-1 text-xs">
+<div>Model: <b>{{ model }}</b> ({{ agent.model_tier }} tier)</div>
+<div>Budget: {{ spent|usd }} of {{ agent.budget_micros|usd }} this month</div>{{ bar(spent, agent.budget_micros) }}
+<div>Tools: {{ grants|join(', ') }}</div>
+<div>Heartbeat: {{ 'every %s'|format(agent.wake_interval_s|dur) if agent.wake_interval_s else 'none (wakes on events)' }}</div>
+<div>Next heartbeat: {{ agent.next_wake_at|ago if agent.next_wake_at else '-' }}</div>
+<div>Last skipped heartbeat: {{ agent.last_heartbeat_skip_at|ago }}</div>
 <div>Reports: {% for r in reports %}<a class="underline" href="/agents/{{ r.id }}">{{ r.name }}</a>{{ ', ' if not loop.last }}{% else %}none{% endfor %}</div>
-<details class="mt-2"><summary>System prompt</summary><pre class="text-xs">{{ agent.system_prompt }}</pre></details>
+</div>
 {% endcall %}
 {% call card("Tasks") %}
-{% for t in tasks %}<div class="border-t py-1">{{ t.title }} <span class="pill {{ 'o-hard_stop' if t.status == 'blocked' else 'o-ok' if t.status == 'done' else 'o-pending' }}">{{ t.status }}</span></div>{% else %}<div class="text-slate-500">None.</div>{% endfor %}
+{% for t in tasks %}<div class="border-t py-1 text-xs">{{ t.title[:100] }} <span class="pill {{ 'o-hard_stop' if t.status == 'blocked' else 'o-ok' if t.status == 'done' else 'o-pending' }}">{{ t.status }}</span></div>{% else %}<div class="text-slate-500 text-xs">None.</div>{% endfor %}
 {% endcall %}
 {% call card("Memory") %}
-{% for n in notes %}<details><summary>{{ n.key }} <span class="text-xs text-slate-500">{{ n.updated_at|ago }}</span></summary><pre class="text-xs">{{ n.body }}</pre></details>{% else %}<div class="text-slate-500">No notes.</div>{% endfor %}
+{% for n in notes %}<details><summary class="cursor-pointer">{{ n.key }} <span class="text-xs text-slate-500">{{ n.updated_at|ago }}</span></summary><pre class="text-xs">{{ n.body }}</pre></details>{% else %}<div class="text-slate-500 text-xs">No notes.</div>{% endfor %}
 {% endcall %}
 </div></div>
 {% endblock %}

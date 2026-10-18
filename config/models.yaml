@@ -24,3 +24,9 @@ web_search_usd_per_call: 0.01
 
 # Dry-run model: simulated prices so the UI shows plausible cost without spending.
 dry_run_simulated_pricing: [2.00, 10.00]
+
+# How to reach Claude. auto = API key / ant profile if present, else the Claude Code login on this
+# machine (claude CLI), else the scripted dry-run model. Or force: api | claude_cli | dry_run
+backend: auto
+cli_max_usd_per_call: 2.0      # hard stop per model call when using the claude CLI
+cli_timeout_s: 600

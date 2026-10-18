@@ -42,12 +42,34 @@ async def write_artifact(ctx: Ctx, args: dict) -> ToolOutput:
     return ToolOutput({"artifact_id": aid, "name": safe, "bytes": len(data)}, ref_type="artifact", ref_id=aid)
 
 
+@tool("list_artifacts", grant="files", action_class="internal",
+      description="List files produced in your org (newest first), optionally filtered by name or task.",
+      properties={"name_contains": {"type": "string"}, "task_id": {"type": "string"}})
+async def list_artifacts(ctx: Ctx, args: dict) -> list:
+    sql = ("SELECT ar.id, ar.name, ar.task_id, ar.size_bytes, ar.created_at, a.name AS author FROM artifacts ar "
+           "LEFT JOIN agents a ON a.id = ar.agent_id WHERE ar.org_id = ?")
+    params: list = [ctx.agent["org_id"]]
+    if args.get("name_contains"):
+        sql += " AND ar.name LIKE ?"
+        params.append(f"%{args['name_contains']}%")
+    if args.get("task_id"):
+        sql += " AND ar.task_id = ?"
+        params.append(args["task_id"])
+    return ctx.db.all(sql + " ORDER BY ar.created_at DESC LIMIT 30", tuple(params))
+
+
 @tool("read_artifact", grant="files", action_class="internal",
-      description="Read a file produced in your org by artifact id.",
-      properties={"artifact_id": {"type": "string"}}, required=["artifact_id"])
+      description="Read a file produced in your org, by artifact id or by file name (latest version).",
+      properties={"artifact_id": {"type": "string", "description": "art_... id, or a file name like plan.md"}},
+      required=["artifact_id"])
 async def read_artifact(ctx: Ctx, args: dict) -> str:
-    row = ctx.db.one("SELECT * FROM artifacts WHERE id = ? AND org_id = ?", (args["artifact_id"], ctx.agent["org_id"]))
+    key = args["artifact_id"].strip()
+    row = ctx.db.one("SELECT * FROM artifacts WHERE id = ? AND org_id = ?", (key, ctx.agent["org_id"]))
     if not row:
-        raise PolicyRefusal("files.missing", "no such artifact in your org")
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", key).strip("._")
+        row = ctx.db.one("SELECT * FROM artifacts WHERE org_id = ? AND (name = ? OR name = ?) ORDER BY created_at DESC LIMIT 1",
+                         (ctx.agent["org_id"], key, safe))
+    if not row:
+        raise PolicyRefusal("files.missing", "no such file in your org; use list_artifacts")
     text = (ctx.settings.artifacts_dir / row["path"]).read_text(errors="replace")
     return text[:20000]

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -20,8 +21,10 @@ from .. import ledger
 from ..budget import platform_caps
 from ..core import Core
 from ..db import Database
-from ..engine import (create_org_from_template, get_agent, get_org, human_message, org_ceo, org_tree,
-                      platform_paused, root_org, set_paused, PolicyRefusal)
+from ..engine import (PolicyRefusal, create_org_from_template, get_agent, get_org, get_setting, human_message,
+                      org_ceo, org_tree, platform_paused, root_org, set_paused)
+from ..goals import goals_for, org_goals, record_measurement
+from ..runtime import model_for, preview_context, system_prompt
 from ..events import log_event
 from ..gateway import invoke
 from ..payments import create_payee, deposit
@@ -38,7 +41,12 @@ def _ago(ts: str | None) -> str:
         return "never"
     s = int((now() - dt).total_seconds())
     if s < 0:
-        return f"in {-s // 60}m" if -s >= 60 else f"in {-s}s"
+        s = -s
+        if s >= 86400:
+            return f"in {s / 86400:.1f}d"
+        if s >= 3600:
+            return f"in {s / 3600:.1f}h"
+        return f"in {s // 60}m" if s >= 60 else f"in {s}s"
     if s < 60:
         return f"{s}s ago"
     if s < 3600:
@@ -59,8 +67,30 @@ def _pretty(s: str | None) -> str:
     return json.dumps(v, indent=2, ensure_ascii=False, default=str)
 
 
+def _num(v: Any) -> str:
+    if v is None:
+        return "-"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return f"{f:,.0f}" if f == int(f) else f"{f:,.2f}"
+
+
+def _dur(s: int | None) -> str:
+    s = int(s or 0)
+    if s >= 86400 and s % 86400 == 0:
+        return f"{s // 86400}d"
+    if s >= 3600:
+        return f"{s / 3600:g}h"
+    return f"{s // 60}m" if s >= 60 else f"{s}s"
+
+
 TEMPLATES.env.filters.update(usd=fmt_usd, ago=_ago, pretty=_pretty, loads=lambda s: loads(s, {}),
-                             short=lambda s: (s or "")[-6:])
+                             short=lambda s: (s or "")[-6:], num=_num, dur=_dur)
+
+BACKEND_LABELS = {"dry_run": "Dry run (scripted)", "claude_cli": "Claude (your login)", "api": "Claude API",
+                  "dry-run": "Dry run (scripted)", "claude-cli": "Claude (your login)", "anthropic": "Claude API"}
 
 
 def org_health(db: Database, org: dict) -> tuple[str, list[str]]:
@@ -112,9 +142,11 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
 
     def page(request: Request, name: str, **ctx: Any) -> HTMLResponse:
         open_queue = db.scalar("SELECT COUNT(*) AS n FROM policy_decisions WHERE verdict = 'hard_stop' AND status = 'open'")
+        open_findings = db.scalar("SELECT COUNT(*) AS n FROM audit_findings WHERE status = 'open'")
         return TEMPLATES.TemplateResponse(request, name, {
             "paused": platform_paused(db), "dry_run": core.llm.name == "dry-run", "open_queue": open_queue or 0,
-            "nav": request.url.path, **ctx})
+            "open_findings": open_findings or 0, "backend_label": BACKEND_LABELS.get(core.backend, core.backend),
+            "backend_why": getattr(core, "backend_why", ""), "nav": request.url.path, **ctx})
 
     def back(request: Request, default: str = "/") -> RedirectResponse:
         return RedirectResponse(request.headers.get("referer") or default, status_code=303)
@@ -137,11 +169,22 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             o["flags"] = db.scalar("SELECT COUNT(*) AS n FROM policy_decisions WHERE org_id = ? AND verdict != 'allowed' "
                                    "AND ts >= ?", (o["id"], ms))
             o["ceo"] = org_ceo(db, o["id"])
+            o["done_tasks"] = db.scalar("SELECT COUNT(*) AS n FROM tasks WHERE org_id = ? AND status = 'done'", (o["id"],))
+            o["goals"] = [g for g in org_goals(db, o["id"]) if g["owner_depth"] == 0][:4]
         monthly, daily, ceiling = platform_caps(settings)
+        gstat = {r["status"]: r["n"] for r in db.all("SELECT status, COUNT(*) AS n FROM goals GROUP BY status")}
         totals = {"month": ledger.spent(db, since=ms), "day": ledger.spent(db, since=day_start()),
                   "monthly_cap": monthly, "daily_cap": daily, "ceiling": ceiling,
                   "running": len(scheduler.running),
+                  "agents": db.scalar("SELECT COUNT(*) AS n FROM agents WHERE status != 'retired'"),
+                  "revenue": db.scalar("SELECT COALESCE(SUM(amount_micros),0) AS s FROM ledger_entries WHERE kind = 'revenue' AND ts >= ?", (ms,)),
+                  "goals_active": gstat.get("active", 0) + gstat.get("at_risk", 0), "goals_risk": gstat.get("at_risk", 0),
+                  "goals_done": gstat.get("achieved", 0),
                   "runs_today": db.scalar("SELECT COUNT(*) AS n FROM runs WHERE started_at >= ?", (day_start(),))}
+        replies = db.all("SELECT m.*, a.name AS sender_name, o.name AS org_name FROM messages m JOIN agents a ON a.id = m.sender_id "
+                         "JOIN orgs o ON o.id = m.org_id WHERE m.recipient_kind = 'human' ORDER BY m.created_at DESC LIMIT 5")
+        findings = db.all("SELECT * FROM audit_findings WHERE status = 'open' ORDER BY CASE severity WHEN 'high' THEN 0 "
+                          "WHEN 'medium' THEN 1 ELSE 2 END, ts DESC LIMIT 5")
         days = []
         for i in range(13, -1, -1):
             d0 = (now() - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -150,7 +193,15 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
                           "WHEN kind = 'payment_reversal' THEN -amount_micros ELSE 0 END),0) AS s FROM ledger_entries "
                           "WHERE ts >= ? AND ts < ?", (iso(d0), iso(d1)))
             days.append({"d": d0.strftime("%b %d"), "usd": round((v or 0) / 1e6, 4)})
-        return page(request, "overview.html", orgs=orgs, totals=totals, days=days)
+        return page(request, "overview.html", orgs=orgs, totals=totals, days=days, replies=replies, findings=findings)
+
+    @app.get("/live", response_class=HTMLResponse)
+    async def live(request: Request):
+        running = db.all(f"SELECT a.id, a.name, o.name AS org FROM agents a JOIN orgs o ON o.id = a.org_id WHERE a.id IN "
+                         f"({','.join('?' for _ in scheduler.running) or 'NULL'})", tuple(scheduler.running))
+        events = db.all("SELECT e.*, a.name AS agent_name FROM events e LEFT JOIN agents a ON a.id = e.agent_id "
+                        "WHERE e.phase != 'before' AND e.action NOT IN ('llm.call', 'heartbeat.skip') ORDER BY e.id DESC LIMIT 14")
+        return TEMPLATES.TemplateResponse(request, "_live.html", {"running": running, "events": events})
 
     # ------------------------------------------------------------------ orgs and agents
 
@@ -167,11 +218,20 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             "AND kind IN ('model_cost','spend','payment') GROUP BY agent_id", (org_id, ms))}
         tasks = db.all("SELECT t.*, a.name AS assignee FROM tasks t JOIN agents a ON a.id = t.assignee_id "
                        "WHERE t.org_id = ? ORDER BY CASE t.status WHEN 'blocked' THEN 0 WHEN 'in_progress' THEN 1 "
-                       "WHEN 'open' THEN 2 ELSE 3 END, t.updated_at DESC LIMIT 100", (org_id,))
+                       "WHEN 'open' THEN 2 ELSE 3 END, t.updated_at DESC LIMIT 200", (org_id,))
         artifacts = db.all("SELECT ar.*, a.name AS agent FROM artifacts ar LEFT JOIN agents a ON a.id = ar.agent_id "
                            "WHERE ar.org_id = ? ORDER BY ar.created_at DESC LIMIT 30", (org_id,))
         kb = db.all("SELECT key, body, updated_at FROM memory_notes WHERE org_id = ? AND agent_id IS NULL ORDER BY key", (org_id,))
+        goals = org_goals(db, org_id)
+        by_id = {g["id"]: {**g, "children": []} for g in goals}
+        goal_roots = []
+        for g in by_id.values():
+            parent = by_id.get(g["parent_goal_id"])
+            (parent["children"] if parent else goal_roots).append(g)
+        board = {k: [t for t in tasks if t["status"] == k] for k in ("open", "in_progress", "blocked", "done")}
         return page(request, "org.html", org=org, tree=tree, spend=spend, tasks=tasks, artifacts=artifacts, kb=kb,
+                    goal_roots=goal_roots, board=board, ceo=org_ceo(db, org_id), running=set(scheduler.running),
+                    headcount=db.scalar("SELECT COUNT(*) AS n FROM agents WHERE org_id = ? AND status != 'retired'", (org_id,)),
                     spent=ledger.spent(db, since=ms, org_id=org_id), wallet=ledger.wallet_balance(db, org_id),
                     settings_json=loads(org["settings_json"], {}))
 
@@ -192,8 +252,23 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         sup = get_agent(db, agent["parent_agent_id"]) if agent["parent_agent_id"] else None
         return page(request, "agent.html", agent=agent, org=org, inbox=inbox, sent=sent, tasks=tasks, runs=runs,
                     notes=notes, reports=reports, sup=sup, grants=loads(agent["grants_json"], []),
+                    goals=goals_for(db, agent), model=model_for(core, agent)[0] if core.llm.name != "dry-run" else "dry-run",
+                    is_running=agent_id in scheduler.running,
                     kpi=loads(agent["kpi_json"], {}),
                     spent=ledger.spent(db, since=month_start(), agent_id=agent_id))
+
+    @app.get("/agents/{agent_id}/prompt", response_class=HTMLResponse)
+    async def agent_prompt(request: Request, agent_id: str):
+        agent = get_agent(db, agent_id)
+        if not agent:
+            raise HTTPException(404)
+        org = get_org(db, agent["org_id"])
+        system = system_prompt(core, agent, org)
+        text = preview_context(core, agent)
+        return HTMLResponse('<div class="mt-2 grid gap-2"><div class="text-xs font-semibold">System prompt</div>'
+                            f'<pre class="text-xs bg-slate-50 border rounded p-2 max-h-96 overflow-auto">{html.escape(system)}</pre>'
+                            '<div class="text-xs font-semibold">Next wake-up message (preview)</div>'
+                            f'<pre class="text-xs bg-slate-50 border rounded p-2 max-h-96 overflow-auto">{html.escape(text)}</pre></div>')
 
     @app.post("/agents/{agent_id}/wake")
     async def wake(request: Request, agent_id: str):
@@ -381,6 +456,60 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         _close(did, f"override -> {result.outcome}: {result.content[:300]}")
         _tell(d, f"The owner overrode the block on {d['action']} ({did}). Result: {result.content[:500]}")
         return back(request, "/queue")
+
+    # ------------------------------------------------------------------ goals, audit, system
+
+    @app.get("/goals", response_class=HTMLResponse)
+    async def goals_page(request: Request):
+        orgs = db.all("SELECT id, name FROM orgs WHERE status != 'retired' ORDER BY parent_org_id IS NOT NULL, created_at")
+        for o in orgs:
+            gs = org_goals(db, o["id"])
+            order = {g["id"]: i for i, g in enumerate(gs)}
+            roots = [g for g in gs if not g["parent_goal_id"]]
+            flat: list[dict] = []
+            for r in roots:
+                flat.append(r)
+                flat.extend(g for g in gs if g["parent_goal_id"] == r["id"])
+            flat.extend(g for g in gs if g not in flat)
+            o["goals"] = sorted(flat, key=lambda g: flat.index(g)) if order else flat
+        return page(request, "goals.html", orgs=orgs)
+
+    @app.post("/goals/{goal_id}/measure")
+    async def goal_measure(request: Request, goal_id: str, value: str = Form(...)):
+        try:
+            record_measurement(db, goal_id=goal_id, value=float(value), source="human")
+        except ValueError:
+            pass
+        return back(request, "/goals")
+
+    @app.get("/audit", response_class=HTMLResponse)
+    async def audit_page(request: Request):
+        q = ("SELECT f.*, o.name AS org_name, a.name AS agent_name FROM audit_findings f LEFT JOIN orgs o ON o.id = f.org_id "
+             "LEFT JOIN agents a ON a.id = f.agent_id ")
+        auditor = db.one("SELECT * FROM agents WHERE role = 'auditor' AND status = 'active' ORDER BY created_at LIMIT 1")
+        return page(request, "audit.html", auditor=auditor,
+                    open=db.all(q + "WHERE f.status = 'open' ORDER BY CASE f.severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, f.ts DESC"),
+                    resolved=db.all(q + "WHERE f.status != 'open' ORDER BY f.resolved_at DESC LIMIT 30"))
+
+    @app.post("/audit/{fid}/resolve")
+    async def audit_resolve(request: Request, fid: str):
+        db.execute("UPDATE audit_findings SET status = 'resolved', resolved_at = ? WHERE id = ?", (iso(), fid))
+        log_event(db, actor_kind="human", kind="human", action="finding.resolve", args={"finding": fid}, outcome="ok")
+        return back(request, "/audit")
+
+    @app.get("/system", response_class=HTMLResponse)
+    async def system_page(request: Request):
+        agents = db.all("SELECT a.*, o.name AS org FROM agents a JOIN orgs o ON o.id = a.org_id WHERE a.status = 'active' "
+                        "ORDER BY a.next_wake_at IS NULL, a.next_wake_at")
+        jobs = db.all("SELECT * FROM events WHERE action IN ('maintenance', 'heartbeat.skip', 'pause', 'resume') "
+                      "ORDER BY id DESC LIMIT 30")
+        monthly, daily, ceiling = platform_caps(settings)
+        return page(request, "system.html", agents=agents, jobs=jobs, running=set(scheduler.running),
+                    tiers=settings.models.get("tiers", {}), search_provider=core.web.search_provider(),
+                    payments=core.payments.name, jev=bool(settings.secret("JEV_API_URL")),
+                    limits=settings.policy["runs"], last_tick=get_setting(db, "maintenance:last_tick", ""),
+                    caps={"monthly": monthly, "daily": daily, "ceiling": ceiling}, money=settings.policy["money"],
+                    msgs=settings.policy["messages"], hard_stops=list(settings.policy.get("hard_stops", {})))
 
     # ------------------------------------------------------------------ money
 

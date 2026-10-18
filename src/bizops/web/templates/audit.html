@@ -1,0 +1,21 @@
+{% extends "base.html" %}{% from "_macros.html" import card %}
+{% block body %}
+<div class="flex items-center gap-3 mb-1"><h1 class="text-2xl font-semibold">Audit</h1>
+{% if auditor %}<a class="text-xs px-2 py-1 rounded-md bg-slate-900 text-white" href="/chat?agent={{ auditor.id }}">Ask the auditor</a>{% endif %}</div>
+<p class="text-slate-500 mb-4">The outside auditor reports to you, not to any CEO. It works from evidence (log, ledger, artifacts), plus automatic code checks for message loops, cost spikes, unsupported claims and stalled agents.</p>
+{% call card("Open findings") %}
+{% for f in open %}
+<div class="border-t py-2 flex gap-3 items-start">
+  <span class="pill sev-{{ f.severity }}">{{ f.severity }}</span>
+  <div class="flex-1"><div class="font-medium">{{ f.summary }}</div>
+  <div class="text-xs text-slate-500">{{ f.kind.replace('_', ' ') }} · {{ f.org_name or 'platform' }}{% if f.agent_name %} · {{ f.agent_name }}{% endif %} · by {{ f.source }} · {{ f.ts|ago }}</div>
+  {% if f.evidence %}<div class="text-xs mt-1"><b>Evidence:</b> {{ f.evidence[:500] }}</div>{% endif %}
+  {% if f.recommendation %}<div class="text-xs"><b>Recommendation:</b> {{ f.recommendation }}</div>{% endif %}</div>
+  <form method="post" action="/audit/{{ f.id }}/resolve"><button class="text-xs px-2 py-1 rounded-md border">resolve</button></form>
+</div>
+{% else %}<div class="text-slate-500 text-xs">Nothing open.</div>{% endfor %}
+{% endcall %}
+{% call card("Resolved") %}
+{% for f in resolved %}<div class="border-t py-1 text-xs text-slate-500"><span class="pill sev-{{ f.severity }}">{{ f.severity }}</span> {{ f.summary }} · resolved {{ f.resolved_at|ago }}</div>{% else %}<div class="text-slate-500 text-xs">None.</div>{% endfor %}
+{% endcall %}
+{% endblock %}

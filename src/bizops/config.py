@@ -68,6 +68,15 @@ class Settings:
         data = self._yaml("models.yaml")
         return deep_merge(data, self.overrides.get("models", {}))
 
+    @cached_property
+    def roles(self) -> dict[str, Any]:
+        return self._yaml("roles.yaml")
+
+    def role(self, name: str) -> dict[str, Any]:
+        if name not in self.roles:
+            raise ValueError(f"unknown role: {name} (see config/roles.yaml)")
+        return self.roles[name]
+
     def template(self, name: str) -> dict[str, Any]:
         path = self.config_dir / "templates" / f"{name}.yaml"
         if not path.is_file():

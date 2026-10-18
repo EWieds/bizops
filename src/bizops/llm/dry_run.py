@@ -52,6 +52,66 @@ def _pick_report(reports: list[dict], text: str) -> dict | None:
     return reports[0]
 
 
+def _result_id(hist: list[dict], prefix: str) -> str | None:
+    for r in _last_results(hist):
+        m = re.search(rf"\b({prefix}_[0-9a-f]+)\b", r)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _system(m: dict, agent: dict, grants: list, reports: list, first: list, later: list, did: list) -> None:
+    """Scripted responses to the platform's automatic messages (kickoff, reviews, nudges, digest)."""
+    body = m["body"]
+    if body.startswith("Kickoff") and "goals" in grants:
+        first.append(("set_goal", {"owner": agent["id"], "title": "Prove someone will pay", "metric": "paying customers",
+                                   "target": 1, "unit": "customers", "due": "45", "reason": "the first thing to prove"}))
+        first.append(("set_goal", {"owner": agent["id"], "title": "Build a lead pipeline", "metric": "qualified leads",
+                                   "target": 20, "unit": "leads", "due": "30", "reason": "leading indicator for revenue"}))
+
+        def cascade(hist: list[dict]) -> list[Call]:
+            gid = _result_id(hist, "goal")
+            calls: list[Call] = []
+            for r in reports[:2]:
+                calls.append(("set_goal", {"owner": r["id"], "title": f"{r['role'].upper()} contribution to the lead pipeline",
+                                           "metric": "deliverables shipped", "target": 3, "unit": "deliverables",
+                                           "due": "21", "parent_goal_id": gid, "reason": "cascade the org goal"}))
+            return calls or [("note_write", {"key": "summary", "body": "Goals set.", "reason": "remember"})]
+        later.append(cascade)
+        did.append("set goals at kickoff")
+    elif body.startswith(("Goal review due", "Goal past due")):
+        gid = re.search(r"\[(goal_[0-9a-f]+)\]", body)
+        if gid:
+            past = body.startswith("Goal past due")
+            first.append(("update_goal", {"goal_id": gid.group(1), "status": "missed" if past else "active",
+                                          "progress_note": "Dry-run review: work in progress, nothing measured yet.",
+                                          "reason": "scheduled goal review"}))
+            did.append("reviewed a goal")
+    elif "gave you a goal" in body:
+        gid = re.search(r"\[(goal_[0-9a-f]+)\]", body)
+        if reports:
+            first.append(("create_task", {"assignee": reports[0]["id"], "title": "Work toward my new goal",
+                                          "deliverable": "A short plan saved with write_artifact",
+                                          "description": body[:400], "reason": "turn the goal into work"}))
+        else:
+            first.append(("note_write", {"key": "goal-plan", "body": f"Plan for {gid.group(1) if gid else 'goal'}: ship 3 deliverables.",
+                                         "reason": "plan toward the goal"}))
+        did.append("planned toward a new goal")
+    elif body.startswith("Daily digest") and "platform_read" in grants:
+        first.append(("org_overview", {"reason": "gather numbers for the digest"}))
+        later.append(lambda hist: [("reply_human", {"text": "Daily digest (dry-run):\n" + clip(" ".join(_last_results(hist)), 700),
+                                                    "reason": "daily digest for the owner"})])
+        did.append("sent the daily digest")
+    elif body.startswith("Stalled task"):
+        tid = re.search(r"\[(tk_[0-9a-f]+)\]", body)
+        if tid:
+            first.append(("update_task", {"task_id": tid.group(1), "status": "blocked",
+                                          "blocked_reason": "dry-run: can't progress without real work",
+                                          "reason": "be honest about the stall"}))
+    else:
+        first.append(("note_write", {"key": "platform-notices", "body": clip(body, 400), "reason": "keep a log"}))
+
+
 def plan(ctx: dict) -> list[Turn]:
     agent = ctx.get("agent", {})
     grants = agent.get("grants", [])
@@ -63,7 +123,9 @@ def plan(ctx: dict) -> list[Turn]:
 
     for m in ctx.get("inbox", []):
         body = m["body"]
-        if m["from_kind"] == "human":
+        if m["from_kind"] == "system":
+            _system(m, agent, grants, reports, first, later, did)
+        elif m["from_kind"] == "human":
             if "platform_read" in grants:
                 ev = re.search(r"\b(ev_[0-9a-f]+)\b", body)
                 first.append(("query_activity", {"event_id": ev.group(1)} if ev else {"limit": 10}))
@@ -151,7 +213,12 @@ def plan(ctx: dict) -> list[Turn]:
             first.extend(work)
         did.append(f"worked on {clip(title, 40)}")
 
-    if not first and not later and "platform_read" in grants and ctx.get("wake_reason") == "timer":
+    if not first and not later and "audit" in grants:
+        first.append(("audit_evidence", {"days": 7, "reason": "routine audit sample"}))
+        later.append([("note_write", {"key": "summary", "body": "Audit sample reviewed; no new evidence-backed findings.",
+                                      "reason": "keep memory current"})])
+        did.append("routine audit")
+    if not first and not later and "platform_read" in grants and ctx.get("wake_reason") in ("timer", "heartbeat"):
         first.append(("org_overview", {"reason": "routine health check"}))
         later.append([("note_write", {"key": "summary", "body": "Routine check done; nothing alarming.",
                                       "reason": "keep memory current"})])

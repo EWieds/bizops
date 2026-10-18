@@ -350,3 +350,17 @@ hook and a safe way to give agents money. So M1 also ships these pieces of M2/M4
 
 Still not built: spawn/retire agents (M3), auditor (M3), email/Stripe connectors (M4), experiments and
 tournaments (M4), ideas pipeline (M5), real payments provider.
+
+## Update 2: harness, loops, hiring, auditor, UI v2
+
+Done: expert role library, layered harness prompt, goals (OKRs) with kickoff/cascade/review loops,
+code-only heartbeats (goal reviews, stalled tasks, budget alerts, daily digest, audit checks, free
+heartbeat skipping), spawn/retire with budget allocation and limits, outside auditor + findings, model
+backend auto-detection with the Claude-login (claude CLI) backend, UI v2 (overview with live feed,
+org chart, goal trees, task board, goals/audit/system pages), background service installer.
+
+Verified live: the seeded company ran on real Claude models through the Claude login for ~4 minutes
+(39 runs, $3.09 against a $3 test cap, which then stopped further work as designed).
+
+Next: connectors (email send, Stripe read for revenue), experiments, tournaments, ideas pipeline ->
+auto-created trial orgs, capital-allocation waterfall, a real payments provider.

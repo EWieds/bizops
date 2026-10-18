@@ -1,0 +1,11 @@
+{% from "_macros.html" import outcome %}
+{% if running %}<div class="mb-2 flex flex-wrap gap-1">{% for r in running %}<a href="/agents/{{ r.id }}" class="pill o-pending live">● {{ r.name }} · {{ r.org }}</a>{% endfor %}</div>{% endif %}
+{% for e in events %}
+<div class="flex items-center gap-2 py-1 border-t border-slate-100 text-xs min-w-0">
+  <span class="text-slate-400 w-14 flex-none">{{ e.ts[11:19] }}</span>
+  <span class="w-24 flex-none truncate">{% if e.agent_id %}<a class="hover:underline" href="/agents/{{ e.agent_id }}">{{ e.agent_name }}</a>{% else %}{{ e.actor_kind }}{% endif %}</span>
+  <code class="w-24 flex-none truncate">{{ e.action }}</code>
+  <span class="flex-1 min-w-0 truncate text-slate-600">{{ e.reason or '' }}</span>
+  {{ outcome(e.outcome) }}
+</div>
+{% else %}<div class="text-slate-500 text-xs">Quiet. Agents wake on messages, tasks and heartbeats.</div>{% endfor %}

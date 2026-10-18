@@ -5,13 +5,14 @@ from bizops.db import Database
 
 def test_migrate_idempotent_and_wal(tmp_path):
     db = Database(tmp_path / "x.db")
-    assert db.migrate() == ["0001_init"]
+    assert db.migrate() == ["0001_init", "0002_goals_audit"]
     assert db.migrate() == []
     assert db.scalar("PRAGMA journal_mode") == "wal"
 
 
 def test_schema_is_portable():
-    sql = resources.files("bizops.migrations").joinpath("0001_init.sql").read_text().upper()
+    files = [f for f in resources.files("bizops.migrations").iterdir() if f.name.endswith(".sql")]
+    sql = "\n".join(f.read_text() for f in files).upper()
     for bad in ("AUTOINCREMENT", "WITHOUT ROWID", "STRICT", "DATETIME(", "JSON_"):
         assert bad not in sql
 

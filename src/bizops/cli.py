@@ -22,7 +22,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
     core = _core(args)
     from .seed import ensure_platform, seed_demo
     seed_demo(core) if args.dry_run or args.seed else ensure_platform(core)
-    mode = "DRY-RUN (scripted model, no tokens spent)" if core.settings.dry_run else "LIVE (real model calls)"
+    mode = ("DRY-RUN (scripted model, no tokens spent)" if core.backend == "dry_run"
+            else f"LIVE via {core.backend}") + f" - {core.backend_why}"
     print(f"bizops: {mode}\n  db: {core.settings.db_path}\n  dashboard: http://{args.host}:{args.port}")
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print("  WARNING: the dashboard has no auth. Only bind to a private network.", file=sys.stderr)
@@ -65,6 +66,24 @@ def cmd_payee(args: argparse.Namespace) -> None:
     core = _core(args)
     pid = create_payee(core.db, name=args.name, org_id=args.org, max_per_payment_usd=args.max, notes=args.notes)
     print(pid)
+
+
+def cmd_install_service(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from .service import install, uninstall
+    if args.uninstall:
+        uninstall()
+        print("bizops service removed")
+        return
+    where = install(Path(args.home or Path.cwd()).resolve(), port=args.port)
+    print(f"bizops runs in the background now ({where}). Dashboard: http://127.0.0.1:{args.port}")
+
+
+def cmd_maintain(args: argparse.Namespace) -> None:
+    from .maintenance import run_jobs
+    core = _core(args)
+    print(run_jobs(core.db, core.settings, force=True))
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -121,6 +140,15 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--max", type=float, default=0, help="max per payment in USD (0 = policy max)")
     s.add_argument("--notes", default="")
     s.set_defaults(fn=cmd_payee)
+
+    s = sub.add_parser("install-service", help="run bizops in the background at login (systemd/launchd/Windows)")
+    s.add_argument("--home", default=None, help="folder with config/ and data/ (default: current folder)")
+    s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--uninstall", action="store_true")
+    s.set_defaults(fn=cmd_install_service)
+
+    s = sub.add_parser("maintain", help="run the background jobs once now (goal reviews, nudges, audit checks)")
+    s.set_defaults(fn=cmd_maintain)
 
     s = sub.add_parser("status", help="orgs, spend and wallets")
     s.set_defaults(fn=cmd_status)

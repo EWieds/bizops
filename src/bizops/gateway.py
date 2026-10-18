@@ -21,7 +21,7 @@ from . import budget, ledger
 from .db import insert
 from .engine import PolicyRefusal, get_agent, get_org, is_runnable
 from .events import log_event
-from .llm.base import LLMResponse, price_micros
+from .llm.base import LLMResponse, price_micros, response_cost
 from .policy import ALLOW, BLOCK, HARD_STOP, check_action
 from .tools import REGISTRY, Ctx, ToolOutput, load_all
 from .util import clip, dumps, iso, new_id
@@ -184,8 +184,7 @@ async def invoke(ctx: Ctx, name: str, args: dict | None, *, reason: str | None =
 
 
 def _charge_model(ctx: Ctx, resp: LLMResponse, *, memo: str, agent_id: str | None) -> int:
-    cost = price_micros(ctx.settings, resp.model, resp.input_tokens, resp.output_tokens,
-                        resp.cache_read_tokens) + resp.extra_cost_micros
+    cost = response_cost(ctx.settings, resp)
     if cost:
         ledger.record(ctx.db, org_id=ctx.agent["org_id"], agent_id=agent_id, run_id=ctx.run_id,
                       kind="model_cost", amount_micros=cost, source="model", memo=memo)

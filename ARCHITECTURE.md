@@ -19,6 +19,44 @@ One process (`bizops serve`): FastAPI dashboard + asyncio scheduler + SQLite (WA
 3. Tool loop: `gateway.model_call` -> tool calls run in parallel through `gateway.invoke` ->
    results back -> until `yield_run`, a turn/token limit, a kill switch or a budget stop.
 
+## Agents are experts (config/roles.yaml)
+Every agent is built from a role in the role library: a senior professional persona with its working
+method (the CEO is an expert in business management and oversight; the CFO and the platform's Chief
+Investment Officer are experts in smart investing and capital allocation; the auditor is a forensic
+auditor; and so on), plus a default model tier, tool grants and heartbeat. Templates pick roles and add
+an org-specific `focus`.
+
+## The harness prompt (runtime.py)
+System prompt, in stable layers (cache-friendly): persona -> where you work (org, owner's brief,
+playbook) -> your seat (supervisor, reports, tools, KPIs) -> operating rhythm (inbox, goals, tasks,
+team, memory, yield) -> rules enforced in code -> quality bar. The per-wake user message carries the
+volatile state: why you woke, inbox, your goals, team goals, open tasks, delegated results, memory,
+budget, wallet. The dashboard shows both for any agent ("show the full harness prompt").
+
+## Goals and loops
+- Kickoff: a new org's CEO gets a kickoff instruction to set 2-4 measurable goals, cascade them to
+  reports (set_goal with parent_goal_id), and create the first tasks.
+- Goals have a metric, target, due date and review cadence. Agents set status and progress notes;
+  the measured value is written only by the owner or a connector.
+- Heartbeats (maintenance.py, code only, no model cost): goal reviews when due, stalled-task nudges
+  then escalation to the delegator, budget alerts at 80% of cap, the platform CEO's daily digest to the
+  owner, message expiry, and code-level audit checks (message loops, cost spikes, achieved-without-
+  evidence goals, agents that run but finish nothing).
+- Agent heartbeats: each role wakes on a schedule, but a heartbeat with nothing to act on (no inbox,
+  tasks, goals to set, or daily review due) is skipped for free.
+
+## Hiring and the auditor
+- spawn_agent hires from the role library under the hirer; the budget moves out of the hirer's own
+  budget; headcount, depth and reports-per-manager limits apply; hires never get money or platform
+  access their manager lacks. retire_agent returns budget and moves tasks, goals and reports up.
+- The outside auditor sits in the platform org with no parent (reports to the owner), reads raw
+  evidence (audit_evidence) and records findings with evidence (record_finding).
+
+## Model backends (llm/)
+Auto-detected (core.detect_backend): API key or `ant` profile -> official SDK; else the Claude login on
+the machine via the `claude` CLI (llm/claude_cli.py: one headless call per turn, built-in tools off,
+JSON schema for proposed tool calls, exact cost from the CLI); else the scripted dry-run model.
+
 ## The gateway (`gateway.py`): the only path to act
 For every tool call:
 1. **Policy** (`policy.check_action`): kill switches, grant, hard stops, standing authorization, rate limit.

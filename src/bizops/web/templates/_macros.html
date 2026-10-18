@@ -1,10 +1,22 @@
-{% macro outcome(o) %}<span class="pill o-{{ o or 'pending' }}">{{ o or 'pending' }}</span>{% endmacro %}
-{% macro pause_btn(target, id, status) %}
+{% macro outcome(o) %}<span class="pill o-{{ o or 'pending' }}">{{ (o or 'pending').replace('_', ' ') }}</span>{% endmacro %}
+{% macro status(s) %}<span class="pill s-{{ s }}">{{ s.replace('_', ' ') }}</span>{% endmacro %}
+{% macro pause_btn(target, id, st) %}
 <form method="post" action="/pause" class="inline">
   <input type="hidden" name="target" value="{{ target }}"><input type="hidden" name="target_id" value="{{ id }}">
-  <input type="hidden" name="paused" value="{{ '0' if status == 'paused' else '1' }}">
-  <button class="text-xs px-2 py-0.5 rounded border {{ 'border-green-600 text-green-700' if status == 'paused' else 'border-red-600 text-red-700' }}">
-    {{ 'resume' if status == 'paused' else 'pause' }}</button>
+  <input type="hidden" name="paused" value="{{ '0' if st == 'paused' else '1' }}">
+  <button class="text-xs px-2 py-0.5 rounded-md border {{ 'border-green-600 text-green-700' if st == 'paused' else 'border-red-300 text-red-700 hover:bg-red-50' }}">
+    {{ 'resume' if st == 'paused' else 'pause' }}</button>
 </form>
 {% endmacro %}
-{% macro card(title) %}<section class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-4"><h2 class="font-semibold mb-2">{{ title }}</h2>{{ caller() }}</section>{% endmacro %}
+{% macro card(title, extra='') %}<section class="card"><h2>{{ title }} {{ extra|safe }}</h2>{{ caller() }}</section>{% endmacro %}
+{% macro bar(value, total, color='bg-slate-700') %}
+<div class="h-1.5 bg-slate-200 rounded-full w-full"><div class="h-1.5 rounded-full {{ 'bg-red-500' if total and value > 0.9 * total else color }}" style="width: {{ [100, (100 * value / (total or 1))]|min }}%"></div></div>
+{% endmacro %}
+{% macro goal_line(g) %}
+<div class="flex items-start gap-2">
+  {{ status(g.status) }}
+  <div class="flex-1"><div class="font-medium">{{ g.title }}</div>
+  <div class="text-xs text-slate-500">{{ g.metric }} · target {{ g.target|num }} {{ g.unit }} · measured <b>{{ g.measured_value|num if g.measured_value is not none else 'not yet' }}</b> · due {{ g.due_at[:10] }}{% if g.owner_name %} · {{ g.owner_name }}{% endif %}</div>
+  {% if g.progress_note %}<div class="text-xs text-slate-600 mt-0.5">“{{ g.progress_note[:220] }}”</div>{% endif %}</div>
+</div>
+{% endmacro %}

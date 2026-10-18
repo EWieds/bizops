@@ -8,37 +8,67 @@
 <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
-  .dot{display:inline-block;width:.6rem;height:.6rem;border-radius:9999px}
+  body{font-feature-settings:"cv11","ss01"}
+  .dot{display:inline-block;width:.6rem;height:.6rem;border-radius:9999px;flex:none}
   .dot-green{background:#16a34a}.dot-yellow{background:#ca8a04}.dot-red{background:#dc2626}
+  .live{animation:pulse 1.6s infinite}@keyframes pulse{50%{opacity:.35}}
   pre{white-space:pre-wrap;word-break:break-word}
-  .pill{font-size:.7rem;padding:.05rem .45rem;border-radius:9999px;font-weight:600}
+  .pill{font-size:.68rem;padding:.08rem .5rem;border-radius:9999px;font-weight:600;white-space:nowrap}
   .o-ok{background:#dcfce7;color:#166534}.o-refused{background:#fee2e2;color:#991b1b}
   .o-error{background:#fde68a;color:#92400e}.o-hard_stop{background:#ede9fe;color:#5b21b6}
-  .o-pending{background:#e0f2fe;color:#075985}
+  .o-pending{background:#e0f2fe;color:#075985}.o-muted{background:#f1f5f9;color:#475569}
+  .s-active{background:#e0f2fe;color:#075985}.s-at_risk{background:#fef3c7;color:#92400e}
+  .s-achieved{background:#dcfce7;color:#166534}.s-missed{background:#fee2e2;color:#991b1b}.s-dropped{background:#f1f5f9;color:#475569}
+  .sev-high{background:#fee2e2;color:#991b1b}.sev-medium{background:#fef3c7;color:#92400e}.sev-low{background:#f1f5f9;color:#475569}
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:.75rem;padding:1rem;margin-bottom:1rem}
+  .card h2{font-weight:600;margin-bottom:.6rem;display:flex;align-items:center;gap:.5rem}
+  /* org chart */
+  .tree ul{padding-top:18px;position:relative;display:flex;justify-content:center}
+  .tree li{list-style:none;position:relative;padding:18px 6px 0;text-align:center}
+  .tree li::before,.tree li::after{content:'';position:absolute;top:0;right:50%;border-top:1px solid #cbd5e1;width:50%;height:18px}
+  .tree li::after{right:auto;left:50%;border-left:1px solid #cbd5e1}
+  .tree li:only-child::after,.tree li:only-child::before{display:none}
+  .tree li:only-child{padding-top:0}
+  .tree li:first-child::before,.tree li:last-child::after{border:0 none}
+  .tree li:last-child::before{border-right:1px solid #cbd5e1;border-radius:0 6px 0 0}
+  .tree li:first-child::after{border-radius:6px 0 0 0}
+  .tree ul ul::before{content:'';position:absolute;top:0;left:50%;border-left:1px solid #cbd5e1;height:18px}
+  .tree > ul{padding-top:0}
 </style>
 </head>
 <body class="bg-slate-50 text-slate-800 text-sm">
-<header class="bg-slate-900 text-slate-100">
-  <div class="max-w-7xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-    <a href="/" class="font-bold text-base mr-2">bizops</a>
-    {% set links = [("/", "Overview"), ("/activity", "Activity"), ("/chat", "Chat"), ("/queue", "Needs a human"), ("/money", "Money"), ("/new", "+ New business")] %}
-    {% for href, label in links %}
-      <a href="{{ href }}" class="{% if nav == href %}text-white underline{% else %}text-slate-300 hover:text-white{% endif %}">{{ label }}{% if href == "/queue" and open_queue %} <span class="pill bg-violet-500 text-white">{{ open_queue }}</span>{% endif %}</a>
-    {% endfor %}
-    <span class="flex-1"></span>
-    {% if dry_run %}<span class="pill bg-amber-400 text-slate-900">DRY RUN · scripted model, simulated costs, sandbox payments</span>{% endif %}
-    <form method="post" action="/pause" class="inline">
-      <input type="hidden" name="target" value="platform">
-      <input type="hidden" name="paused" value="{{ '0' if paused else '1' }}">
-      <button class="px-2 py-1 rounded {{ 'bg-green-600' if paused else 'bg-red-600' }} text-white font-semibold"
-        onclick="return confirm('{{ 'Resume' if paused else 'PAUSE' }} the whole platform?')">
-        {{ 'Resume platform' if paused else 'Kill switch: pause all' }}</button>
+<div class="flex min-h-screen">
+<aside class="w-56 bg-slate-900 text-slate-300 flex-none hidden md:flex flex-col">
+  <a href="/" class="px-5 py-4 text-white font-bold text-lg tracking-tight">bizops<span class="text-slate-500 font-normal text-xs ml-1">holding co.</span></a>
+  {% set links = [("/", "Overview", ""), ("/goals", "Goals", ""), ("/activity", "Activity", ""), ("/chat", "Chat", ""),
+                  ("/queue", "Needs you", open_queue), ("/audit", "Audit", open_findings), ("/money", "Money", ""),
+                  ("/system", "System", ""), ("/new", "+ New business", "")] %}
+  <nav class="flex flex-col gap-0.5 px-2">
+  {% for href, label, badge in links %}
+    <a href="{{ href }}" class="px-3 py-2 rounded-md flex items-center justify-between {% if nav == href or (href != '/' and nav.startswith(href)) %}bg-slate-700 text-white{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+      <span>{{ label }}</span>{% if badge %}<span class="pill bg-violet-500 text-white">{{ badge }}</span>{% endif %}</a>
+  {% endfor %}
+  </nav>
+  <div class="mt-auto p-3 text-xs space-y-2">
+    <div class="rounded-md bg-slate-800 p-2"><div class="text-slate-400">Model access</div>
+      <div class="text-white font-medium">{{ backend_label }}</div><div class="text-slate-400">{{ backend_why }}</div></div>
+    <form method="post" action="/pause">
+      <input type="hidden" name="target" value="platform"><input type="hidden" name="paused" value="{{ '0' if paused else '1' }}">
+      <button class="w-full px-2 py-2 rounded-md {{ 'bg-green-600' if paused else 'bg-red-600' }} text-white font-semibold"
+        onclick="return confirm('{{ 'Resume' if paused else 'PAUSE' }} the whole platform?')">{{ 'Resume everything' if paused else 'Kill switch: pause all' }}</button>
     </form>
   </div>
-</header>
-{% if paused %}<div class="bg-red-600 text-white text-center py-1 font-semibold">Platform paused. No agent runs, no actions execute.</div>{% endif %}
-<main class="max-w-7xl mx-auto px-4 py-4">
-{% block body %}{% endblock %}
-</main>
+</aside>
+<div class="flex-1 min-w-0">
+  <header class="md:hidden bg-slate-900 text-white px-4 py-2 flex gap-3 overflow-x-auto">
+    {% for href, label, badge in links %}<a href="{{ href }}" class="whitespace-nowrap">{{ label }}</a>{% endfor %}
+  </header>
+  {% if paused %}<div class="bg-red-600 text-white text-center py-1.5 font-semibold">Platform paused. No agent runs, no actions execute.</div>{% endif %}
+  {% if dry_run %}<div class="bg-amber-100 text-amber-900 text-center py-1 text-xs">Dry run: scripted model, simulated costs, sandbox payments. {{ backend_why }}</div>{% endif %}
+  <main class="max-w-7xl mx-auto px-4 md:px-6 py-5">
+  {% block body %}{% endblock %}
+  </main>
+</div>
+</div>
 </body>
 </html>
