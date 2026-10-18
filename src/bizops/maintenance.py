@@ -172,6 +172,36 @@ def audit_checks(db: Database, settings: Settings) -> int:
     return n
 
 
+def management_reviews(db: Database, settings: Settings) -> int:
+    """Wake each manager for a thorough review of their team's work, but only when the team did something."""
+    hours = float(_cfg(settings).get("management_review_hours", 12))
+    if hours <= 0:
+        return 0
+    n = 0
+    managers = db.all("SELECT DISTINCT m.* FROM agents m JOIN agents r ON r.parent_agent_id = m.id AND r.status = 'active' "
+                      "AND r.org_id = m.org_id WHERE m.status = 'active'")
+    for m in managers:
+        key = f"mgmt_review:{m['id']}"
+        last = get_setting(db, key, "")
+        if last and (now() - parse_iso(last)).total_seconds() < hours * 3600:
+            continue
+        since = last or iso(now() - timedelta(hours=hours))
+        active = db.scalar("SELECT COUNT(*) AS n FROM events e JOIN agents a ON a.id = e.agent_id WHERE a.parent_agent_id = ? "
+                           "AND e.ts >= ? AND e.phase = 'after' AND e.kind = 'tool' AND e.action NOT IN ('yield_run','note_write')",
+                           (m["id"], since))
+        set_setting(db, key, iso())
+        if not active:
+            continue
+        _system_msg(db, settings, m,
+                    "Management review is due. Be thorough: run team_report, open the actual deliverables (read_artifact, "
+                    "the published pages, the emails in lead_thread), and judge them against a professional bar. For "
+                    "anything below it, send it to the right specialist with request_review and specific feedback (e.g. "
+                    "the Head of Growth for copy and pages, the CFO for numbers). Unblock or reassign stuck work, correct "
+                    "drift from the goals, recognize what's good, then update your summary note.")
+        n += 1
+    return n
+
+
 def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[str, int]:
     """One maintenance pass. Each job throttles itself; `force` runs them all now (tests, CLI)."""
     cfg = _cfg(settings)
@@ -195,6 +225,8 @@ def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[s
     if force or _due(db, "ideas", 600):
         from . import ideas
         out["research_cycle"] = int(ideas.research_cycle(db, settings))
+    if force or _due(db, "mgmt", 600):
+        out["management_reviews"] = management_reviews(db, settings)
     if force or _due(db, "followups", 900):
         out["followups"] = business.followups_due(db, settings)
     acted = {k: v for k, v in out.items() if v}

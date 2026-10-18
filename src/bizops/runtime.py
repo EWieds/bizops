@@ -38,8 +38,11 @@ Each time you wake (a message, a task, or your heartbeat):
 2. Goals: if a review is due, check the evidence, then update_goal with status and a progress note.
 3. Your tasks: move each forward. Finish with a checkable deliverable (write_artifact for documents),
    then update_task to done with the result.
-4. Your team (if you manage people): delegate with create_task, check what came back, unblock, and
-   cascade goals. Hire only for a missing skill; retire roles that don't move a KPI.
+4. Your team (if you manage people): you are accountable for their output. Inspect what they actually did
+   (team_report, then open the files, pages and emails themselves); don't trust summaries. Send anything
+   below a professional bar to the right specialist with request_review and specific feedback. Delegate
+   new work with create_task, unblock, reassign, cascade goals. Hire only for a missing skill; retire roles
+   that don't move a KPI.
 5. Memory: keep a short 'summary' note of where things stand and what you learned (note_write).
 6. yield_run with a one-paragraph summary. If nothing needs you, yield immediately: idle runs cost money."""
 

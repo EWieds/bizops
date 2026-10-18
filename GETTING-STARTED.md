@@ -1,0 +1,86 @@
+# Getting started with bizops
+
+Total time: about 2 hours, most of it creating accounts. You do this once.
+
+## Part 1: Create accounts (in your name)
+
+These are tied to your identity by law; agents can't create them for you.
+
+1. **Fly.io** (hosting, ~$15-25/month): fly.io -> Sign up -> add a card.
+2. **A domain** (~$12/year): Cloudflare or Namecheap, e.g. `yourbrand.com`.
+3. **A mailbox on that domain** (~$7/month): Google Workspace -> create `hello@yourbrand.com`.
+   1. In that Google account: Security -> turn on **2-Step Verification**.
+   2. Go to https://myaccount.google.com/apppasswords -> create an app password -> copy it.
+   3. Google Workspace Admin -> Apps -> Gmail -> **Authenticate email (DKIM)** -> turn it on.
+   4. At your domain provider, add the **SPF** and **DMARC** records Google shows you. This keeps your
+      emails out of spam.
+4. **A postal address** (required by anti-spam law): a PO box or virtual mailbox.
+5. **Stripe** (stripe.com): sign up, verify your identity, add your bank account. Then:
+   1. Developers -> API keys -> **Create restricted key**.
+   2. Allow **Write** on Products, Prices and Payment Links.
+   3. Allow **Read** on Checkout Sessions and Events.
+   4. Copy the key (starts with `rk_live_`).
+6. **Optional:**
+   - **Jev / TypeSafe key** (typesafe.ai): cheaper, faster decisions.
+   - **Anthropic API key** (console.anthropic.com): no usage-limit pauses.
+   - **Vapi key** (vapi.ai): only if a business sells real phone agents.
+
+## Part 2: Install two things on your computer
+
+1. **Node.js**: https://nodejs.org -> download the LTS version -> run the installer.
+2. **Claude Code**: open Terminal (Mac: Cmd+Space, type "Terminal") and run:
+   ```
+   npm install -g @anthropic-ai/claude-code
+   claude
+   ```
+   Log in with your Claude account in the browser window, then type `/exit`.
+
+## Part 3: Put bizops on the internet (~10 minutes)
+
+In Terminal:
+```
+cd ~/Downloads
+tar xzf bizops-source.tar.gz
+cd bizops
+bash scripts/deploy-fly.sh
+```
+- A browser opens to log in to Fly.io, and again to create a Claude token. Approve both.
+- At the end it prints your **dashboard address** (like `https://bizops-you-1234.fly.dev`) and your
+  **password**. Save both somewhere safe.
+
+If anything errors, copy the error text and send it to Claude to fix.
+
+## Part 4: Connect your accounts (once)
+
+Open your dashboard address, log in, click **Connect accounts**, and press **Test and save** on each:
+
+1. **Stripe**: paste the `rk_live_...` key.
+2. **Email**:
+   - SMTP host `smtp.gmail.com`, port `587`; IMAP host `imap.gmail.com`, port `993`
+   - Username: your mailbox (`hello@yourbrand.com`); password: the app password
+   - From address: `hello@yourbrand.com`
+   - Legal sender name: your name or company
+   - Postal address: your PO box
+3. **Model access** (optional): paste your Jev key and/or Anthropic API key.
+4. **Password** (optional): change it to one you'll remember.
+
+## Part 5: Start a business
+
+Pick one:
+- **Let it find one:** go to **Ideas** -> **Research new ideas now**. Proposals appear within the hour.
+  Strong ones are launched automatically (you'll get a chat message), or press **Launch now** yourself.
+- **Give it your idea:** go to **Chat** -> Platform CEO -> type your idea -> press **Launch as a business**.
+- **From a video or document:** in **Chat**, paste a YouTube link or attach a PDF/Word file, then press
+  **Business plan**, **Build a website** or **Launch as a business**.
+
+## Part 6: Supervise (10 minutes a day, the first week)
+
+- **Needs you**: the only things that require you (signing contracts, approving a new vendor, etc.).
+- **Sales & customers**: read the first emails the agents send; see leads, replies, payments, customers.
+- **Activity**: everything every agent did, with its reason and cost.
+- **Money**: spend vs revenue per business.
+- **Audit**: issues the outside auditor found.
+- **Emergency**: the red **Kill switch** in the sidebar stops everything instantly.
+
+The CEOs review their teams' actual work every 12 hours and send weak work back to the right specialist,
+so quality improves on its own; your job is spot-checks and the Needs-you queue.

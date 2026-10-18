@@ -80,6 +80,7 @@ heartbeats:
   daily_review_hours: 24        # managers get at least one review run per this many hours
   audit_every_s: 3600           # code-level audit checks (loops, cost anomalies, unsupported claims)
   connector_poll_s: 60          # check the mailbox and the payment provider this often
+  management_review_hours: 12   # managers review their team's actual work this often (only if the team did something)
 
 # Selling: outreach, offers and payments. Enforced in code.
 sales:

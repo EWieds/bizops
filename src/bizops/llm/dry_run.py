@@ -102,6 +102,20 @@ def _system(m: dict, agent: dict, grants: list, reports: list, first: list, late
         later.append(lambda hist: [("reply_human", {"text": "Daily digest (dry-run):\n" + clip(" ".join(_last_results(hist)), 700),
                                                     "reason": "daily digest for the owner"})])
         did.append("sent the daily digest")
+    elif body.startswith("Management review is due"):
+        first.append(("team_report", {"hours": 24, "reason": "inspect the team's actual work"}))
+
+        def review(hist: list[dict]) -> list[Call]:
+            res = _all_results(hist)
+            files = _ids(res, "art")
+            growth = next((r for r in reports if r["role"] in ("marketer", "writer")), reports[0] if reports else None)
+            if files and growth:
+                return [("request_review", {"reviewer": growth["id"], "artifact_id": files[0],
+                                            "feedback": "Tighten it: lead with the customer's problem, cut filler, one clear next step.",
+                                            "reason": "below the bar; the growth lead owns copy quality"})]
+            return [("note_write", {"key": "summary", "body": "Reviewed the team; nothing needs rework.", "reason": "log the review"})]
+        later.append(review)
+        did.append("management review")
     elif body.startswith("Stalled task"):
         tid = re.search(r"\[(tk_[0-9a-f]+)\]", body)
         if tid:
