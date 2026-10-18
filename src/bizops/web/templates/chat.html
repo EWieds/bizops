@@ -1,21 +1,32 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="grid md:grid-cols-4 gap-4">
-<aside class="bg-white border rounded-lg p-3">
+<aside class="bg-white border rounded-xl p-3 h-fit">
   <div class="text-xs text-slate-500 mb-1">Talk to</div>
-  {% for a in agents %}<a href="/chat?agent={{ a.id }}" class="block px-2 py-1 rounded {{ 'bg-slate-800 text-white' if current and current.id == a.id else 'hover:bg-slate-100' }}">{{ a.name }}<div class="text-xs opacity-70">{{ a.org }}</div></a>{% endfor %}
+  {% for a in agents %}<a href="/chat?agent={{ a.id }}" class="block px-2 py-1.5 rounded-md {{ 'bg-slate-800 text-white' if current and current.id == a.id else 'hover:bg-slate-100' }}">{{ a.name }}<div class="text-xs opacity-70">{{ a.title or '' }} · {{ a.org }}</div></a>{% endfor %}
+  <div class="text-xs text-slate-500 mt-3 border-t pt-2">Paste a YouTube link or attach files (PDF, Word, text, CSV). They're read automatically and saved where the agents can use them.</div>
 </aside>
-<section class="md:col-span-3 bg-white border rounded-lg p-3 flex flex-col" style="min-height:70vh">
+<section class="md:col-span-3 bg-white border rounded-xl flex flex-col" style="height:calc(100vh - 90px);min-height:520px">
   {% if current %}
-  <div class="font-semibold mb-2">{{ current.name }} <span class="text-xs text-slate-500">Messages land in its inbox and wake it. The platform CEO answers from the log and ledger and passes instructions down.</span></div>
-  <div id="thread" class="flex-1 overflow-y-auto" hx-get="/chat/thread?agent={{ current.id }}" hx-trigger="every 3s" hx-swap="innerHTML">
+  <div class="px-4 py-3 border-b"><div class="font-semibold">{{ current.name }}</div><div class="text-xs text-slate-500">{{ current.title }}. Replies arrive here in a few seconds to a few minutes; you can leave and come back.</div></div>
+  <div id="thread" class="flex-1 overflow-y-auto px-4" hx-get="/chat/thread?agent={{ current.id }}" hx-trigger="every 2s" hx-swap="innerHTML">
     {% set busy = false %}{% include "_chat_thread.html" %}
   </div>
-  <form method="post" action="/chat" class="mt-2 flex gap-2">
+  <form method="post" action="/chat" enctype="multipart/form-data" class="border-t p-3" id="chatform">
     <input type="hidden" name="agent" value="{{ current.id }}">
-    <textarea name="text" rows="2" class="flex-1 border rounded p-2" placeholder="Message {{ current.name }}..." required></textarea>
-    <button class="px-4 rounded bg-slate-800 text-white">Send</button>
+    <textarea name="text" rows="3" class="w-full border rounded-lg p-2" placeholder="Give it an idea, a YouTube link, or a question. Shift+Enter for a new line." id="chattext"></textarea>
+    <div class="flex flex-wrap items-center gap-2 mt-2">
+      <label class="text-xs px-2 py-1.5 rounded-md border cursor-pointer hover:bg-slate-50">📎 Attach files<input type="file" name="files" multiple class="hidden" onchange="document.getElementById('fnames').textContent=[...this.files].map(f=>f.name).join(', ')"></label>
+      <span id="fnames" class="text-xs text-slate-500"></span>
+      <span class="flex-1"></span>
+      <button name="action" value="plan" class="text-xs px-2 py-1.5 rounded-md border hover:bg-slate-50">Business plan</button>
+      <button name="action" value="website" class="text-xs px-2 py-1.5 rounded-md border hover:bg-slate-50">Build a website</button>
+      <button name="action" value="launch" class="text-xs px-2 py-1.5 rounded-md border hover:bg-slate-50">Launch as a business</button>
+      <button name="action" value="" class="px-4 py-1.5 rounded-md bg-slate-900 text-white">Send</button>
+    </div>
   </form>
-  {% else %}<div class="text-slate-500">No CEOs yet.</div>{% endif %}
+  <script>document.getElementById('chattext').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('chatform').submit();}});
+  var t=document.getElementById('thread');t.scrollTop=t.scrollHeight;</script>
+  {% else %}<div class="p-4 text-slate-500">No one to talk to yet.</div>{% endif %}
 </section></div>
 {% endblock %}

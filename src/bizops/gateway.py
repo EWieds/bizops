@@ -73,8 +73,12 @@ async def invoke(ctx: Ctx, name: str, args: dict | None, *, reason: str | None =
     load_all()
     db, settings = ctx.db, ctx.settings
     args = dict(args or {})
-    reason = (reason if reason is not None else str(args.pop("reason", "") or "")).strip()
-    args.pop("reason", None)
+    own_reason = "reason" in ((REGISTRY.get(name).input_schema.get("properties") or {}) if REGISTRY.get(name) else {})
+    if reason is None:
+        reason = str((args.get("reason") if own_reason else args.pop("reason", "")) or "")
+    elif not own_reason:
+        args.pop("reason", None)
+    reason = reason.strip()
     call_id = new_id("call")
     fresh = get_agent(db, ctx.agent["id"])
     if fresh:

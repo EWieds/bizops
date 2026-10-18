@@ -147,7 +147,7 @@ def selling_flows(ctx: dict) -> tuple[list[list[Turn]], set[str], set[str]]:
     for m in ctx.get("inbox", []):
         body = m["body"]
         # Platform: the owner asks for a new business -> analyst researches and proposes.
-        if "venture" in g and m["from_kind"] == "human" and re.search(r"\b(launch|new business|find a)\b", body, re.I):
+        if "venture" in g and m["from_kind"] == "human" and re.search(r"\b(new business|find a|find us)\b", body.split("\n\n")[0], re.I):
             analyst = next((r for r in reports if r["role"] == "venture_analyst"), None)
             if analyst:
                 flows.append([[("create_task", {"assignee": analyst["id"], "title": "Research and propose a new business we can run",
@@ -157,13 +157,20 @@ def selling_flows(ctx: dict) -> tuple[list[list[Turn]], set[str], set[str]]:
                                                 "opportunities; I'll launch the best one inside the venture budget and tell you.",
                                                 "reason": "acknowledge the owner"})]])
                 done_msgs.add(m["id"])
-        # Platform: a proposal came back -> launch the business.
-        elif "venture" in g and m["from_kind"] == "agent" and "propos" in body.lower():
-            flows.append([[("create_business", {"name": "Columbus AI Receptionists", "template": "voice-agent-sales", "brief": BRIEF,
-                                                "reason": "the proposal is well evidenced and fits the venture budget"})],
-                          lambda hist: [("reply_human", {"text": "Launched a new business on trial: Columbus AI Receptionists "
-                                                          f"({clip(_all_results(hist), 160)}). It sells AI phone receptionists "
-                                                          "to local service businesses.", "reason": "tell the owner"})]])
+        # Platform: a scored proposal arrived -> decide it (standing authorization) and tell the owner.
+        elif "venture" in g and m["from_kind"] == "system" and body.startswith("New proposal"):
+            pid = (_ids(body, "prop") or [None])[0]
+            score = re.search(r"scored ([0-9.]+)/5", body)
+            strong = score and float(score.group(1)) >= 3.6 and "Standing authorization" in body
+            if pid:
+                flows.append([[("decide_proposal", {"proposal_id": pid, "decision": "approve" if strong else "park",
+                                                     "reason": "Strong score and evidence; launch a capped trial." if strong
+                                                     else "Promising but below the auto-launch bar; parked for the owner."})],
+                              lambda hist, strong=strong: [("reply_human", {
+                                  "text": ("Couldn't launch it yet: " if "REFUSED" in _all_results(hist) else
+                                           "Launched a new business on trial from our ideas pipeline: " if strong else
+                                           "New idea parked for your review on the Ideas page: ") + clip(_all_results(hist), 160),
+                                  "reason": "tell the owner"})]])
             done_msgs.add(m["id"])
         # Business CEO kickoff: goals backed by real metrics, an offer, and the first tasks.
         elif m["from_kind"] == "system" and body.startswith("Kickoff") and "sales" in g:
@@ -256,7 +263,23 @@ def selling_flows(ctx: dict) -> tuple[list[list[Turn]], set[str], set[str]]:
         title = t["title"].lower()
         if t["status"] == "blocked":
             continue
-        if {"voice", "site"} <= g and ("website" in title or "demo" in title):
+        if "ideas" in g and (title.startswith("research cycle") or "propose" in title):
+            flows.append([[("web_search", {"query": "AI receptionist for small businesses pricing demand", "reason": "evidence"})],
+                          [("submit_proposal", {
+                              "title": "Columbus AI Receptionists", "summary": "AI phone receptionists for local service businesses that miss calls.",
+                              "thesis": BRIEF.split("Customer:")[0].replace("Thesis: ", ""),
+                              "target_customer": "Owner-operated dental, HVAC and plumbing businesses in Columbus, OH",
+                              "offer": "AI receptionist, $149/month", "template": "voice-agent-sales",
+                              "evidence": [{"claim": "Competitors charge $99-$399/month", "source_url": "https://example.com/pricing"}],
+                              "plan": "Week 1: demo + site. Weeks 2-3: 100 personalized emails with live demos. Day 45: 3 paying customers.",
+                              "starting_budget_usd": 50, "kill_criteria": "Fewer than 2 paying customers or <5% replies by day 60.",
+                              "scores": {"demand": 4, "time_to_revenue": 4, "automation_fit": 4, "cost_to_test": 4, "competition": 3,
+                                         "legal_risk": 4, "owner_steps": 3}, "source": "research", "reason": "best idea this cycle"})],
+                          lambda hist, t=t: [("update_task", {"task_id": t["id"], "status": "done",
+                                                              "result": f"Proposal submitted: {clip(_all_results(hist), 120)}",
+                                                              "reason": "cycle complete"})]])
+            done_tasks.add(t["id"])
+        elif {"voice", "site"} <= g and ("website" in title or "demo" in title):
             url = re.search(r"https?://\S+", t.get("description") or "")
             flows.append([[("create_voice_agent", {"business_name": "Bright Smiles Dental (demo)",
                                                    "greeting": "Thanks for calling Bright Smiles Dental, how can I help you today?",

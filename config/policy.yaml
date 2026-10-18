@@ -101,6 +101,10 @@ venture:
   max_on_trial: 3
   starting_cap_usd: 50
   templates: [generic, voice-agent-sales, rank-and-rent, digital-products]
+  research_every_days: 3          # the venture analyst runs a research cycle on its own this often (0 = off)
+  proposals_per_cycle: 3
+  auto_launch: true               # the platform CEO may launch strong proposals itself, inside the limits above
+  auto_launch_min_score: 3.6      # out of 5
 
 # Quality bar: outbound work is scored against a professional rubric (0-4) before it ships, by Jev when
 # TYPESAFE_API_KEY is set, else by the cheapest Claude tier. Below the bar it is sent back with feedback.

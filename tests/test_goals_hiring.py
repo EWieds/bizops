@@ -86,3 +86,12 @@ async def test_spawn_tool_through_gateway(core, org):
     r = await invoke(Ctx(core=core, agent=org["researcher"]), "spawn_agent",
                      {"role": "sales", "budget_usd": 1, "focus": "x"})
     assert not r.ok and "grant" in r.content
+
+
+async def test_tools_with_their_own_reason_field_keep_it(core, org):
+    """The gateway's audit 'reason' must not swallow a tool's own 'reason' parameter."""
+    from bizops.engine import spawn_agent
+    hire = spawn_agent(core.db, core.settings, hirer=org["ceo"], role="designer", budget_usd=1, focus="x")
+    r = await invoke(Ctx(core=core, agent=org["ceo"]), "retire_agent", {"agent_id": hire["id"], "reason": "KPI flat"})
+    assert r.ok, r.content
+    assert core.db.scalar("SELECT reason FROM events WHERE call_id = ? AND phase = 'before'", (r.call_id,)) == "KPI flat"

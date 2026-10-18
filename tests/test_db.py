@@ -5,7 +5,7 @@ from bizops.db import Database
 
 def test_migrate_idempotent_and_wal(tmp_path):
     db = Database(tmp_path / "x.db")
-    assert db.migrate() == ["0001_init", "0002_goals_audit", "0003_business"]
+    assert db.migrate() == ["0001_init", "0002_goals_audit", "0003_business", "0004_ideas_chat"]
     assert db.migrate() == []
     assert db.scalar("PRAGMA journal_mode") == "wal"
 

@@ -81,6 +81,23 @@ public customer-facing routes: /s/<business>/<page> websites, /demo/<agent> live
 /pay/<offer> checkout, /u/<token> unsubscribe, /f/<file>/<sig> shared deliverables. Deploy:
 Dockerfile + fly.toml + scripts/deploy-fly.sh, or `bizops serve --tunnel` from a computer.
 
+## Ideas pipeline (ideas.py, tools/ideas.py)
+maintenance runs research_cycle every venture.research_every_days: it tasks the venture analyst, who
+submits proposals (submit_proposal: weighted 1-5 scores, sourced evidence, plan, kill criteria; duplicates
+refused). The platform CEO gets each one and, under the standing authorization (venture.auto_launch), launches
+strong ones with decide_proposal inside the venture budget. The owner can launch any proposal from /ideas.
+
+## Chat and media (web/app.py chat_post, media.py)
+Owner messages can carry files (PDF/DOCX/text/CSV: original + extracted text saved as artifacts) and
+YouTube links (title/channel via oEmbed, transcript via youtube-transcript-api, saved as an artifact). The
+agent sees previews wrapped as untrusted content and reads the full text with read_artifact. Quick actions
+append a precise brief (business plan / website / launch). Replies render as markdown with artifact links.
+
+## Jev and quality (decide.py)
+Decider answers typed questions with Jev (TypeSafe System One) when TYPESAFE_API_KEY is set, else the
+cheapest Claude tier: reply triage, heartbeat triage, model routing, approver step, and the quality gates
+that score outbound emails, published pages and "done" claims before they ship.
+
 ## Ventures
 The platform's venture analyst proposes businesses; the platform CEO launches them with create_business
 inside the venture budget (max new per month, max on trial, starting cap). New businesses start on trial.

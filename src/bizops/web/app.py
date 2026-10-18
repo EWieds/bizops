@@ -13,8 +13,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from .. import ledger
@@ -152,6 +152,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         return TEMPLATES.TemplateResponse(request, name, {
             "paused": platform_paused(db), "dry_run": core.llm.name == "dry-run", "open_queue": open_queue or 0,
             "open_findings": open_findings or 0,
+            "new_ideas": db.scalar("SELECT COUNT(*) AS n FROM proposals WHERE status = 'new'") or "",
             "llm_paused_until": (lambda v: v if v and v > iso() else "")(get_setting(db, "llm_paused_until", "")), "backend_label": BACKEND_LABELS.get(core.backend, core.backend),
             "backend_why": getattr(core, "backend_why", ""), "nav": request.url.path, **ctx})
 
@@ -370,8 +371,8 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
     # ------------------------------------------------------------------ chat
 
     def chat_agents() -> list[dict]:
-        return db.all("SELECT a.id, a.name, o.name AS org, o.parent_org_id FROM agents a JOIN orgs o ON o.id = a.org_id "
-                      "WHERE a.depth = 0 AND a.status != 'retired' ORDER BY o.parent_org_id IS NOT NULL, o.created_at")
+        return db.all("SELECT a.id, a.name, a.title, o.name AS org, o.parent_org_id FROM agents a JOIN orgs o ON o.id = a.org_id "
+                      "WHERE a.depth = 0 AND a.status != 'retired' ORDER BY o.parent_org_id IS NOT NULL, o.created_at, a.created_at")
 
     def thread(agent_id: str) -> list[dict]:
         return list(reversed(db.all(
@@ -384,7 +385,8 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         if not agent and agents:
             agent = agents[0]["id"]
         current = get_agent(db, agent) if agent else None
-        return page(request, "chat.html", agents=agents, current=current, messages=thread(agent) if agent else [])
+        return page(request, "chat.html", agents=agents, current=current, messages=thread(agent) if agent else [],
+                    quick=QUICK_ACTIONS)
 
     @app.get("/chat/thread", response_class=HTMLResponse)
     async def chat_thread(request: Request, agent: str):
@@ -392,11 +394,65 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         busy = agent in scheduler.running or bool(a and a["wake_requested_at"])
         return TEMPLATES.TemplateResponse(request, "_chat_thread.html", {"messages": thread(agent), "busy": busy})
 
+    QUICK_ACTIONS = {
+        "plan": ("Turn this into a complete, investor-grade business plan: problem and customer, market size with sources, "
+                 "offer and pricing, competition and positioning, go-to-market, operations (what our agents do), 12-month "
+                 "financials with assumptions, risks, and a 60-day launch plan. Save it as a file and send me the link."),
+        "website": ("Build a professional website for this idea and publish it: clear headline, the customer's problem, "
+                    "the offer with pricing, how it works, proof or credibility, FAQ, and one clear call to action. "
+                    "Mobile friendly. Send me the link."),
+        "launch": ("Turn this into a full proposal (scored, with sourced evidence and kill criteria). If it's strong, "
+                   "launch it as a business on trial and tell me what you decided."),
+        "summary": "Summarize the key business ideas in this, with what's useful for us and what's not.",
+    }
+
     @app.post("/chat")
-    async def chat_post(request: Request, agent: str = Form(...), text: str = Form(...)):
-        if text.strip():
-            human_message(db, settings, agent, text.strip(), type="chat")
-            scheduler.poke()
+    async def chat_post(request: Request, agent: str = Form(...), text: str = Form(""), action: str = Form(""),
+                        files: list[UploadFile] = File(default=[])):
+        from ..media import save_text_artifact, save_upload, youtube, youtube_ids
+        a = get_agent(db, agent)
+        if not a:
+            raise HTTPException(404)
+        body = text.strip()
+        if action in QUICK_ACTIONS:
+            body = (body + "\n\n" if body else "") + QUICK_ACTIONS[action]
+        attachments: list[dict] = []
+        notes: list[str] = []
+        for f in files or []:
+            if not f.filename:
+                continue
+            data = await f.read()
+            if not data:
+                continue
+            try:
+                saved = save_upload(db, settings, org_id=a["org_id"], name=f.filename, data=data)
+            except PolicyRefusal as e:
+                notes.append(f"(Could not attach {f.filename}: {e.detail})")
+                continue
+            ref = saved.get("text") or saved.get("file")
+            attachments.append({"name": f.filename, "artifact_id": ref["id"], "file_id": saved.get("file", {}).get("id")})
+            notes.append(f"[Attached file: {f.filename} -> artifact {ref['id']}, {saved['chars']} chars of text. "
+                         f"Read it in full with read_artifact.]\nPreview:\n<untrusted_file>{saved['preview']}</untrusted_file>")
+        for vid in youtube_ids(body)[:3]:
+            try:
+                v = await youtube(core, vid)
+                aid = save_text_artifact(db, settings, org_id=a["org_id"], name=f"youtube-{vid}.md",
+                                         text=f"# {v['title']}\nChannel: {v['channel']}\nURL: {v['url']}\n\n{v['transcript']}")
+                attachments.append({"name": f"YouTube: {v['title'] or vid}", "artifact_id": aid, "youtube": v["url"]})
+                notes.append(f"[YouTube video '{v['title']}' by {v['channel']} (~{v['minutes']} min): full transcript saved as "
+                             f"artifact {aid}; read it with read_artifact.]\nOpening:\n<untrusted_transcript>{v['transcript'][:1500]}"
+                             "</untrusted_transcript>")
+            except Exception as e:
+                notes.append(f"[YouTube video {vid}: transcript not fetched automatically ({getattr(e, 'detail', e)}). "
+                             "Try youtube_transcript yourself.]")
+        if not body and not attachments:
+            return RedirectResponse(f"/chat?agent={agent}", status_code=303)
+        full = body + ("\n\n" + "\n\n".join(notes) if notes else "")
+        msg = human_message(db, settings, agent, full or "(attachment)", type="chat")
+        if attachments:
+            db.execute("UPDATE messages SET attachments_json = ? WHERE id = ?", (json.dumps(attachments), msg["id"]))
+        db.execute("UPDATE agents SET min_interval_s = MIN(min_interval_s, 10) WHERE id = ?", (agent,))
+        scheduler.poke()
         return RedirectResponse(f"/chat?agent={agent}", status_code=303)
 
     # ------------------------------------------------------------------ needs a human / blocked
@@ -591,7 +647,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             scheduler.poke()
         return RedirectResponse(f"/orgs/{org_id}", status_code=303)
 
-    @app.get("/artifacts/{aid}", response_class=PlainTextResponse)
+    @app.get("/artifacts/{aid}")
     async def artifact(aid: str):
         row = db.one("SELECT * FROM artifacts WHERE id = ?", (aid,))
         if not row:
@@ -599,9 +655,49 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         path = (settings.artifacts_dir / row["path"]).resolve()
         if settings.artifacts_dir.resolve() not in path.parents:
             raise HTTPException(400)
-        return PlainTextResponse(path.read_text(errors="replace"))
+        if row["mime"].startswith("text/") or row["mime"] in ("application/json",):
+            return PlainTextResponse(path.read_text(errors="replace"))
+        return FileResponse(path, filename=row["name"], media_type=row["mime"])
 
     register_connect(app, core, page)
+
+    @app.get("/ideas", response_class=HTMLResponse)
+    async def ideas_page(request: Request):
+        from ..ideas import SCORE_WEIGHTS
+        rows = db.all("SELECT p.*, o.name AS org_name FROM proposals p LEFT JOIN orgs o ON o.id = p.org_id "
+                      "ORDER BY CASE p.status WHEN 'new' THEN 0 WHEN 'parked' THEN 1 WHEN 'launched' THEN 2 ELSE 3 END, "
+                      "p.total_score DESC, p.created_at DESC LIMIT 100")
+        for r in rows:
+            r["scores"] = loads(r["scores_json"], {})
+            r["evidence"] = loads(r["evidence_json"], [])
+        root = root_org(db)
+        analyst = db.one("SELECT * FROM agents WHERE role = 'venture_analyst' AND status = 'active' ORDER BY created_at LIMIT 1")
+        return page(request, "ideas.html", proposals=rows, weights=SCORE_WEIGHTS, analyst=analyst,
+                    pceo=org_ceo(db, root["id"]) if root else None, venture=settings.policy.get("venture", {}),
+                    last_cycle=get_setting(db, "ideas:last_cycle", ""))
+
+    @app.post("/ideas/{pid}/{decision}")
+    async def ideas_decide(request: Request, pid: str, decision: str, reason: str = Form("owner decision")):
+        from ..ideas import decide, launch_proposal
+        if decision == "launch":
+            try:
+                oid = launch_proposal(db, settings, proposal_id=pid, actor=None, reason=reason)
+            except PolicyRefusal as e:
+                raise HTTPException(400, e.detail)
+            scheduler.poke()
+            return RedirectResponse(f"/orgs/{oid}", status_code=303)
+        if decision in ("park", "reject"):
+            decide(db, proposal_id=pid, status="parked" if decision == "park" else "rejected", actor=None, reason=reason)
+        return back(request, "/ideas")
+
+    @app.post("/ideas/research-now")
+    async def ideas_research_now(request: Request):
+        from ..engine import set_setting
+        from ..ideas import research_cycle
+        set_setting(db, "ideas:last_cycle", "")
+        research_cycle(db, settings)
+        scheduler.poke()
+        return back(request, "/ideas")
 
     @app.get("/pipeline", response_class=HTMLResponse)
     async def pipeline(request: Request, org: str = ""):

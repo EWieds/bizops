@@ -1,9 +1,13 @@
 {% for m in messages %}
-<div class="my-2 flex {{ 'justify-end' if m.sender_kind == 'human' }}">
-  <div class="max-w-[80%] rounded-lg px-3 py-2 {{ 'bg-slate-800 text-white' if m.sender_kind == 'human' else 'bg-slate-100' }}">
-    <div class="whitespace-pre-wrap">{{ m.body }}</div>
-    <div class="text-[10px] opacity-60 mt-1">{{ m.type }} · {{ m.created_at|ago }}{% if m.sender_kind == 'human' %} · {{ m.status }}{% endif %}</div>
+<div class="my-3 flex {{ 'justify-end' if m.sender_kind == 'human' }}">
+  <div class="max-w-[85%] rounded-xl px-3 py-2 {{ 'bg-slate-800 text-white' if m.sender_kind == 'human' else 'bg-slate-100' }}">
+    {% if m.sender_kind == 'human' %}<div class="whitespace-pre-wrap">{{ m.body.split('\n\n[Attached')[0].split('\n\n[YouTube')[0] }}</div>
+    {% else %}<div class="md" data-md>{{ m.body }}</div>{% endif %}
+    {% set att = m.attachments_json|loads if m.attachments_json else [] %}
+    {% if att %}<div class="mt-1 flex flex-wrap gap-1">{% for a in att %}<a href="/artifacts/{{ a.artifact_id }}" target="_blank" class="pill bg-white/20 border border-white/30">{{ '▶ ' if a.youtube else '📎 ' }}{{ a.name[:60] }}</a>{% endfor %}</div>{% endif %}
+    <div class="text-[10px] opacity-60 mt-1">{{ m.created_at|ago }}{% if m.sender_kind == 'human' %} · {{ 'seen' if m.status == 'read' else 'delivered' }}{% endif %}</div>
   </div>
 </div>
-{% else %}<div class="text-slate-500">No messages yet. Say hello.</div>{% endfor %}
-{% if busy %}<div class="text-xs text-slate-500 italic">working on it...</div>{% endif %}
+{% else %}<div class="text-slate-500 mt-4">No messages yet. Try: "Find us a business to launch", or paste a YouTube link and press Business plan.</div>{% endfor %}
+{% if busy %}<div class="text-xs text-slate-500 italic my-2 live">working on it…</div>{% endif %}
+<script>renderMd(document.getElementById('thread'));</script>

@@ -192,6 +192,9 @@ def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[s
     if force or _due(db, "inbound", float(cfg.get("inbound_every_s", 15))):
         out["sim"] = simworld.tick(db, settings)
         out["goals_measured"] = business.measure_goals(db)
+    if force or _due(db, "ideas", 600):
+        from . import ideas
+        out["research_cycle"] = int(ideas.research_cycle(db, settings))
     if force or _due(db, "followups", 900):
         out["followups"] = business.followups_due(db, settings)
     acted = {k: v for k, v in out.items() if v}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}{% from "_macros.html" import card %}
+{% block body %}
+<div class="flex flex-wrap items-center gap-3 mb-1"><h1 class="text-2xl font-semibold">Ideas</h1>
+<form method="post" action="/ideas/research-now"><button class="text-xs px-3 py-1.5 rounded-md bg-slate-900 text-white">Research new ideas now</button></form>
+{% if pceo %}<a href="/chat?agent={{ pceo.id }}" class="text-xs px-3 py-1.5 rounded-md border">Pitch your own idea (chat)</a>{% endif %}</div>
+<p class="text-slate-500 mb-4">The venture analyst researches on its own every {{ venture.research_every_days }} days (last: {{ last_cycle|ago }}) and submits scored proposals.
+{% if venture.auto_launch %}The platform CEO may launch proposals scoring ≥ {{ venture.auto_launch_min_score }}/5 itself, within your venture limits ({{ venture.max_new_orgs_per_month }}/month, {{ venture.max_on_trial }} on trial).{% else %}You decide every launch.{% endif %}
+"Launch now" is yours and skips those limits.</p>
+{% for p in proposals %}
+<section class="card {{ 'opacity-60' if p.status in ('rejected',) }}">
+  <div class="flex flex-wrap items-start gap-3">
+    <div class="text-center w-16 flex-none"><div class="text-2xl font-bold {{ 'text-green-700' if p.total_score >= 3.6 else 'text-amber-700' if p.total_score >= 3 else 'text-slate-500' }}">{{ '%.1f'|format(p.total_score) }}</div><div class="text-[10px] text-slate-500">of 5</div></div>
+    <div class="flex-1 min-w-0">
+      <div class="flex flex-wrap items-center gap-2"><h2 class="!mb-0">{{ p.title }}</h2><span class="pill {{ 'o-ok' if p.status == 'launched' else 'o-pending' if p.status == 'new' else 'o-muted' }}">{{ p.status }}</span><span class="pill o-muted">{{ p.template }}</span><span class="pill o-muted">from {{ p.source }}</span><span class="text-xs text-slate-500">{{ p.created_at|ago }}</span></div>
+      <p class="mt-1">{{ p.summary }}</p>
+      <div class="grid md:grid-cols-2 gap-x-6 gap-y-1 text-xs mt-2">
+        <div><b>Customer:</b> {{ p.target_customer }}</div><div><b>Offer:</b> {{ p.offer }}</div>
+        <div><b>Budget:</b> ${{ '%.0f'|format(p.starting_budget_usd) }}/month</div><div><b>Kill criteria:</b> {{ p.kill_criteria }}</div>
+      </div>
+      <div class="flex flex-wrap gap-3 mt-2">{% for k, w in weights.items() %}<div class="text-[11px] w-24"><div class="text-slate-500">{{ k.replace('_', ' ') }}</div><div class="h-1.5 bg-slate-200 rounded-full"><div class="h-1.5 bg-slate-700 rounded-full" style="width:{{ (p.scores.get(k, 1)|float) * 20 }}%"></div></div></div>{% endfor %}</div>
+      <details class="mt-2 text-xs"><summary class="cursor-pointer">Thesis, evidence and 60-day plan</summary>
+        <div class="mt-1"><b>Thesis:</b> {{ p.thesis }}</div>
+        <ul class="list-disc ml-5 mt-1">{% for e in p.evidence %}<li>{{ e.claim }} {% if e.source_url %}<a class="underline" href="{{ e.source_url }}" target="_blank" rel="noopener">source</a>{% endif %}</li>{% endfor %}</ul>
+        <div class="md mt-1" data-md>{{ p.plan }}</div>
+        {% if p.artifact_id %}<a class="underline" href="/artifacts/{{ p.artifact_id }}">full write-up</a>{% endif %}
+        {% if p.source_ref %}<div>Source: {{ p.source_ref }}</div>{% endif %}
+      </details>
+      {% if p.decision_reason %}<div class="text-xs text-slate-600 mt-1"><b>Decision:</b> {{ p.decision_reason }}</div>{% endif %}
+    </div>
+    <div class="flex flex-col gap-1 w-32 flex-none">
+      {% if p.status == 'launched' %}<a href="/orgs/{{ p.org_id }}" class="text-xs px-2 py-1.5 rounded-md bg-green-700 text-white text-center">Open business</a>
+      {% else %}
+      <form method="post" action="/ideas/{{ p.id }}/launch" onsubmit="return confirm('Launch {{ p.title|e }} as a business on trial?')"><button class="w-full text-xs px-2 py-1.5 rounded-md bg-slate-900 text-white">Launch now</button></form>
+      {% if p.status != 'parked' %}<form method="post" action="/ideas/{{ p.id }}/park"><button class="w-full text-xs px-2 py-1.5 rounded-md border">Park</button></form>{% endif %}
+      {% if p.status != 'rejected' %}<form method="post" action="/ideas/{{ p.id }}/reject"><button class="w-full text-xs px-2 py-1.5 rounded-md border">Reject</button></form>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% else %}<div class="card text-slate-500">No proposals yet. Press "Research new ideas now", or pitch one in chat.</div>{% endfor %}
+{% endblock %}

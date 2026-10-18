@@ -7,12 +7,26 @@
 <script src="https://cdn.tailwindcss.com/3.4.5"></script>
 <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script>
+function renderMd(root){(root||document).querySelectorAll('[data-md]').forEach(function(el){
+  if(el.dataset.done)return; var src=el.textContent;
+  var html=(window.marked&&window.DOMPurify)?DOMPurify.sanitize(marked.parse(src)):src.replace(/</g,'&lt;').replace(/\n/g,'<br>');
+  html=html.replace(/\b(art_[0-9a-f]{20,})\b/g,'<a class="underline" target="_blank" href="/artifacts/$1">$1</a>');
+  el.innerHTML=html; el.dataset.done=1;});}
+document.addEventListener('DOMContentLoaded',function(){renderMd();});
+document.addEventListener('htmx:afterSwap',function(e){renderMd(e.target);});
+</script>
 <style>
   body{font-feature-settings:"cv11","ss01"}
   .dot{display:inline-block;width:.6rem;height:.6rem;border-radius:9999px;flex:none}
   .dot-green{background:#16a34a}.dot-yellow{background:#ca8a04}.dot-red{background:#dc2626}
   .live{animation:pulse 1.6s infinite}@keyframes pulse{50%{opacity:.35}}
   pre{white-space:pre-wrap;word-break:break-word}
+  .md p{margin:.35rem 0}.md ul{list-style:disc;margin:.3rem 0 .3rem 1.2rem}.md ol{list-style:decimal;margin:.3rem 0 .3rem 1.2rem}
+  .md h1,.md h2,.md h3{font-weight:600;margin:.5rem 0 .2rem}.md a{text-decoration:underline}.md code{background:rgba(0,0,0,.06);padding:0 .2rem;border-radius:3px}
+  .md table{border-collapse:collapse;margin:.4rem 0}.md td,.md th{border:1px solid #cbd5e1;padding:.15rem .4rem}
   .pill{font-size:.68rem;padding:.08rem .5rem;border-radius:9999px;font-weight:600;white-space:nowrap}
   .o-ok{background:#dcfce7;color:#166534}.o-refused{background:#fee2e2;color:#991b1b}
   .o-error{background:#fde68a;color:#92400e}.o-hard_stop{background:#ede9fe;color:#5b21b6}
@@ -40,7 +54,7 @@
 <div class="flex min-h-screen">
 <aside class="w-56 bg-slate-900 text-slate-300 flex-none hidden md:flex flex-col">
   <a href="/" class="px-5 py-4 text-white font-bold text-lg tracking-tight">bizops<span class="text-slate-500 font-normal text-xs ml-1">holding co.</span></a>
-  {% set links = [("/", "Overview", ""), ("/pipeline", "Sales & customers", ""), ("/goals", "Goals", ""), ("/activity", "Activity", ""), ("/chat", "Chat", ""),
+  {% set links = [("/", "Overview", ""), ("/pipeline", "Sales & customers", ""), ("/ideas", "Ideas", new_ideas), ("/goals", "Goals", ""), ("/activity", "Activity", ""), ("/chat", "Chat", ""),
                   ("/queue", "Needs you", open_queue), ("/audit", "Audit", open_findings), ("/money", "Money", ""),
                   ("/system", "System", ""), ("/connect", "Connect accounts", ""), ("/new", "+ New business", "")] %}
   <nav class="flex flex-col gap-0.5 px-2">
