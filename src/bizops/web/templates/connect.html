@@ -9,7 +9,7 @@
 <label class="block text-xs mb-2">{{ label }}<input name="{{ name }}" type="{{ type }}" value="{{ values[name] }}" class="mt-0.5 w-full border rounded p-1.5 text-sm" autocomplete="off">{% if help %}<span class="text-slate-500">{{ help }}</span>{% endif %}</label>
 {% endmacro %}
 {% call card("1. Get paid: Stripe", '<span class="pill ' ~ ('o-ok' if status.billing == 'stripe' else 'o-muted') ~ '">' ~ status.billing ~ '</span>') %}
-<p class="text-xs text-slate-600 mb-2">Create a Stripe account (stripe.com, 10 minutes, needs ID and bank). In the Stripe dashboard: Developers -> API keys -> create a <b>restricted key</b> with write access to Products, Prices, Payment Links and read access to Checkout Sessions and Events. Payments land in your Stripe balance and pay out to your bank; each one is tagged with its business.</p>
+<p class="text-xs text-slate-600 mb-2">Create a Stripe account (stripe.com, 10 minutes, needs ID and bank). In the Stripe dashboard: Developers -> API keys -> create a <b>restricted key</b> (Custom permissions) with write access to Products, Prices, Payment Links and read access to Events, Balance and Checkout Sessions; everything else None. Payments land in your Stripe balance and pay out to your bank; each one is tagged with its business.</p>
 <form method="post" action="/connect/stripe">{{ field('STRIPE_SECRET_KEY', 'Stripe secret or restricted key (rk_live_... or sk_live_...)') }}<button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Test and save</button></form>
 {% endcall %}
 {% call card("2. Send and receive email", '<span class="pill ' ~ ('o-ok' if status.email == 'smtp' else 'o-muted') ~ '">' ~ status.email ~ '</span>') %}

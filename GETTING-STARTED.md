@@ -18,7 +18,7 @@ These are tied to your identity by law; agents can't create them for you.
 5. **Stripe** (stripe.com): sign up, verify your identity, add your bank account. Then:
    1. Developers -> API keys -> **Create restricted key**.
    2. Allow **Write** on Products, Prices and Payment Links.
-   3. Allow **Read** on Checkout Sessions and Events.
+   3. Allow **Read** on Events, Balance (the Connect page test reads it) and Checkout Sessions. Leave everything else None.
    4. Copy the key (starts with `rk_live_`).
 6. **Anthropic API key** (console.anthropic.com -> API keys): how the always-on server reaches Claude.
    Set a monthly spend limit there too. (Running a subscription login on a 24/7 server may be against
