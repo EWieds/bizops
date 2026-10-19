@@ -23,6 +23,7 @@ authorizations:
   spend: allow                # payments inside budgets, to owner-allowlisted payees only
   publish: allow              # (M4) sites, content
   email_b2b: allow            # (M4) with sender identification and opt-out
+  browse: allow               # drive a real browser: sign up, log in, check out with an approved card
 
 # The fixed list the system cannot do for you. Always lands in the needs-a-human queue.
 hard_stops:
@@ -35,6 +36,7 @@ hard_stops:
   connect_email: "Connecting the email account agents send from (one time)"
   connect_billing: "Connecting the umbrella Stripe account (one time)"
   billing_dispute: "Responding to a chargeback in Stripe (agents never contact a customer who disputed)"
+  browser_assist: "A website step only a person can do: a CAPTCHA, a code sent to the owner's phone, an ID or selfie check"
 
 # Per-agent per-hour rate limits by tool name. '*' is the default for unlisted tools.
 rate_limits:
@@ -42,6 +44,10 @@ rate_limits:
   web_search: 60
   fetch_url: 120
   pay: 10
+  request_purchase: 10
+  browser_open: 120
+  browser_click: 300
+  browser_type: 300
 
 # Pre-screening: actions in this list go through the approver chain before running.
 # The chain allows or blocks on its own. It never waits for a human.
@@ -54,6 +60,18 @@ approver:
     create_offer: {chain: [rules, jev, llm], on_unavailable: block}
     send_payment_link: {chain: [rules, jev], on_unavailable: allow}
     send_email: {chain: [rules, jev], on_unavailable: allow}
+
+# Card purchases (purchases.py): an agent asks, the platform's Chief Investment Officer decides, a
+# vendor-locked virtual card for exactly that amount pays. Draws only on the wallet the owner loaded.
+purchases:
+  max_per_purchase_usd: 300                 # one-time price, or monthly price of a subscription
+  max_monthly_subscriptions_usd_per_org: 300
+
+# The agents' browser (browser.py). Headless Chromium on the server, one saved profile per business.
+browser:
+  action_timeout_s: 15
+  max_chars_returned: 20000
+  allow_private_hosts: false    # tests only: lets the browser open localhost pages
 
 money:
   per_payment_max_usd: 50          # absolute max for any single payment

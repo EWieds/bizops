@@ -596,6 +596,10 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             o["sandbox_revenue"] = ledger.revenue(db, since="2000", org_id=o["id"], sandbox=True)
             o["cleared"] = business.cleared_revenue_cents(db, org_id=o["id"]) * 10_000
         payees = db.all("SELECT p.*, o.name AS org_name FROM payees p LEFT JOIN orgs o ON o.id = p.org_id ORDER BY p.created_at DESC")
+        buys = db.all("SELECT p.*, o.name AS org_name, a.name AS agent_name, d.name AS decider_name FROM purchases p "
+                      "JOIN orgs o ON o.id = p.org_id LEFT JOIN agents a ON a.id = p.agent_id "
+                      "LEFT JOIN agents d ON d.id = p.decided_by "
+                      "ORDER BY p.status != 'pending', p.created_at DESC LIMIT 100")
         entries = db.all("SELECT l.*, o.name AS org_name, a.name AS agent_name FROM ledger_entries l "
                          "JOIN orgs o ON o.id = l.org_id LEFT JOIN agents a ON a.id = l.agent_id "
                          "WHERE l.kind != 'model_cost' ORDER BY l.ts DESC LIMIT 100")
@@ -603,6 +607,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         from ..capital import waterfall_view
         return page(request, "money.html", orgs=orgs, payees=payees, entries=entries, money=settings.policy["money"],
                     cap=waterfall_view(db), holdback=settings.policy.get("sales", {}).get("revenue_holdback_days", 30),
+                    buys=buys, purchase_limits=settings.policy.get("purchases", {}), cards=core.cards.name,
                     caps={"monthly": monthly, "daily": daily, "ceiling": ceiling,
                           "month": ledger.spent(db, since=ms), "day": ledger.spent(db, since=day_start())})
 
@@ -615,6 +620,22 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
     async def money_payee(request: Request, name: str = Form(...), org_id: str = Form(""), max_usd: float = Form(0),
                           notes: str = Form("")):
         create_payee(db, name=name, org_id=org_id or None, max_per_payment_usd=max_usd, notes=notes)
+        return back(request, "/money")
+
+    @app.post("/money/purchase/{pid}/{action}")
+    async def purchase_action(request: Request, pid: str, action: str, note: str = Form("")):
+        from .. import purchases
+        try:
+            if action in ("approve", "deny"):
+                await purchases.decide(core, purchase_id=pid, decider="human", approve=action == "approve",
+                                       reason=note or f"owner {action}d")
+            elif action == "cancel":
+                await purchases.cancel(core, purchase_id=pid, by="human")
+            else:
+                raise HTTPException(404)
+        except PolicyRefusal as e:
+            raise HTTPException(409, e.detail)
+        scheduler.poke()
         return back(request, "/money")
 
     @app.post("/money/payee/{pid}/toggle")

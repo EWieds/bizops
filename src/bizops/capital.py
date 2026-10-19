@@ -84,6 +84,8 @@ def compute_period(db: Database, settings: Settings, org_id: str, month: str) ->
     start, end = month_bounds(month)
     cleared = cleared_revenue_cents(db, org_id=org_id, paid_from=start, paid_before=end) * 10_000
     costs = ledger.spent(db, since=start, org_id=org_id) - ledger.spent(db, since=end, org_id=org_id)
+    # Card purchases come out of the wallet rather than the ops budget, but they are real costs.
+    costs += ledger.purchases_since(db, org_id, start) - ledger.purchases_since(db, org_id, end)
     profit = cleared - costs
     tax = reserve = surplus = 0
     if profit > 0:

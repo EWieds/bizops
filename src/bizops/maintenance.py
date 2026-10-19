@@ -266,10 +266,12 @@ def heartbeat_needed(db: Database, settings: Settings, agent: dict) -> tuple[boo
 
 
 async def poll_connectors(core) -> dict[str, int]:
-    """Pull new replies from the mailbox and new payments from the billing provider."""
-    from . import business
+    """Pull new replies from the mailbox and new payments from the billing provider; renew monthly
+    purchases (debit the wallet or pause the card); close browser tabs nobody is using."""
+    from . import business, purchases
     out: dict[str, int] = {}
-    for name, fn in (("emails_in", business.poll_email), ("payments_in", business.poll_billing)):
+    for name, fn in (("emails_in", business.poll_email), ("payments_in", business.poll_billing),
+                     ("renewals", purchases.renew_due), ("tabs_closed", lambda c: c.browser.close_idle())):
         try:
             out[name] = await fn(core)
         except Exception as e:

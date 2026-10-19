@@ -26,7 +26,14 @@
 <p class="text-xs text-slate-600 mb-2">Only needed if a business sells phone agents. Without it, voice agents still work as live web demos. With a Vapi account (vapi.ai), agents also create real phone assistants; you attach phone numbers in Vapi (telephony needs your identity). Inbound calls only.</p>
 <form method="post" action="/connect/voice">{{ field('VAPI_API_KEY', 'Vapi private API key') }}<button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Test and save</button></form>
 {% endcall %}
-{% call card("4. Web address and login") %}
+{% call card("4. Let agents buy things: virtual cards", '<span class="pill ' ~ ('o-ok' if cards == 'privacy' else 'o-muted') ~ '">' ~ cards ~ '</span>') %}
+<p class="text-xs text-slate-600 mb-2">Agents ask to buy a tool or subscription; your Chief Investment Officer approves or denies it; each approved purchase gets its own Privacy.com card, locked to that vendor, with a limit of exactly the approved amount. Nothing is spent beyond what you load into each business's wallet on the Money page. Sign up at privacy.com (needs ID and a funding bank account), then Account -> API to get your key. Browser for agents: <b>{{ 'installed' if browser_ok else 'not installed' }}</b>.</p>
+<form method="post" action="/connect/cards" class="grid grid-cols-2 gap-x-3"><div class="col-span-2">{{ field('PRIVACY_API_KEY', 'Privacy.com API key') }}</div>
+{{ field('CARDHOLDER_NAME', 'Name on the card', 'as on your Privacy account') }}{{ field('CARDHOLDER_ZIP', 'Billing ZIP code') }}
+{{ field('PRIVACY_SANDBOX', 'Sandbox mode (1 = test key)', 'leave empty for live') }}
+<div><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Test and save</button></div></form>
+{% endcall %}
+{% call card("5. Web address and login") %}
 <p class="text-xs text-slate-600 mb-1">Public URL for business websites, demos and checkout: <b>{{ public_url }}</b></p>
 <form method="post" action="/connect/site">{{ field('PUBLIC_BASE_URL', 'Public URL (set automatically when deployed)') }}<button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Save</button></form>
 <form method="post" action="/connect/password" class="mt-3"><label class="block text-xs mb-2">Owner password {{ '(set)' if has_password else '(not set: the dashboard only works from this machine)' }}

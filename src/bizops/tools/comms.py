@@ -97,13 +97,16 @@ async def reply_human(ctx: Ctx, args: dict) -> ToolOutput:
 
 
 HARD_STOP_CATEGORIES = ["legal_commitment", "identity_account", "consumer_voice_sms", "raise_cap",
-                        "external_transfer"]
+                        "external_transfer", "browser_assist"]
 
 
 @tool("request_human", grant="comms", action_class=lambda a: str(a.get("category", "legal_commitment")),
       description="File an item the system legally cannot do for you (signing contracts, identity-verified "
                   "accounts, consumer calls/texts without consent, raising caps past the ceiling, moving money "
-                  "out). It goes to the owner's queue; the task is marked blocked; keep working on other things.",
+                  "out), or a website step only a person can do after you really tried (browser_assist: CAPTCHA, "
+                  "a code texted to the owner's phone, ID check; say the site, the page and exactly what's needed). "
+                  "It goes to the owner's queue; the task is marked blocked; keep working on other things. "
+                  "The owner's answer (e.g. a code) comes back to you as a message; your browser tab stays open.",
       properties={"category": {"type": "string", "enum": HARD_STOP_CATEGORIES},
                   "summary": {"type": "string", "description": "exactly what you need the owner to do"},
                   "task_id": {"type": "string"}},

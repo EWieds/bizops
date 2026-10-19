@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+browser = ["playwright>=1.47"]
 
 [project.scripts]
 bizops = "bizops.cli:main"

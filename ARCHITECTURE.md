@@ -172,6 +172,23 @@ cost written to the ledger after.
   payee, per-payment max, payee max, daily org max, wallet balance and budget atomically, needs a memo
   and a task, passes the approver, is idempotent, and reverses on provider failure. Provider is
   `sandbox` until a real one is plugged in.
+- Purchases (`purchases.py`, `cards.py`, `tools/purchases.py`): an agent with the money grant asks to buy
+  a tool or subscription (vendor, item, price, once/monthly, why). Refused in code above the per-purchase
+  limit, the per-business subscription limit, or what the wallet has left after other pending requests.
+  The platform's Chief Investment Officer decides (`decide_purchase`), or the owner on the Money page;
+  nobody decides their own request. Approval debits the wallet (ledger kind `purchase`, not counted as
+  model/ops spend) and issues one virtual card (Privacy.com, or `sandbox`) locked to the vendor with a
+  limit of exactly the approved amount, so the issuer enforces the limit too. Monthly purchases are
+  debited every 30 days; when the wallet can't cover it the card is paused until the owner adds money.
+- Browser (`browser.py`, `tools/browser.py`): headless Chromium (Playwright) on the server, one
+  persistent profile per business (logins survive), one tab per agent. Pages come back as text with
+  numbered element refs (iframes too, for checkout card fields). Navigations pass the same SSRF guard as
+  fetch_url. Secrets are typed through placeholders, `{{card:<purchase>:number}}` and
+  `{{login:<name>:password}}`, resolved at the last moment and redacted from everything returned and
+  logged. `save_login` generates passwords the model never sees. Mail to `mailbox+<business-slug>@domain`
+  is stored as account mail (`read_account_mail`) for verification codes. Steps only a person can do
+  (CAPTCHA, a code to the owner's phone, ID checks) go to the owner's queue as `browser_assist`; the
+  owner's note (e.g. the code) comes back to the agent, whose tab is still open.
 - Messages: peers only within an org (plus direct supervisor/report edges), hop limit, TTL.
 - Revenue/metrics are written only by connectors or the owner (ledger source rules).
 - Kill switches: platform, org, agent. Dashboard buttons + `bizops pause`.

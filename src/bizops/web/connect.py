@@ -20,10 +20,11 @@ FIELDS = {
     "email": ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "IMAP_HOST", "IMAP_PORT", "EMAIL_FROM",
               "SENDER_NAME", "SENDER_ADDRESS"],
     "voice": ["VAPI_API_KEY"],
+    "cards": ["PRIVACY_API_KEY", "PRIVACY_SANDBOX", "CARDHOLDER_NAME", "CARDHOLDER_ZIP"],
     "models": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "BRAVE_API_KEY", "TYPESAFE_API_KEY"],
     "site": ["PUBLIC_BASE_URL"],
 }
-SECRET = {"TYPESAFE_API_KEY", "STRIPE_SECRET_KEY", "SMTP_PASSWORD", "VAPI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+SECRET = {"PRIVACY_API_KEY", "TYPESAFE_API_KEY", "STRIPE_SECRET_KEY", "SMTP_PASSWORD", "VAPI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
           "BRAVE_API_KEY", "JEV_API_KEY"}
 
 
@@ -73,6 +74,7 @@ def register_connect(app: FastAPI, core, page) -> None:
     async def connect(request: Request, msg: str = "", err: str = ""):
         from ..business import public_base
         return page(request, "connect.html", values=state(), status=core.connectors.status(), msg=msg, err=err,
+                    cards=core.cards.name, browser_ok=core.browser.installed(),
                     public_url=public_base(core.db, core.settings), has_password=bool(os.environ.get("BIZOPS_PASSWORD_HASH")))
 
     @app.post("/connect/{group}")
@@ -97,6 +99,10 @@ def register_connect(app: FastAPI, core, page) -> None:
                 result = await asyncio.to_thread(test_smtp, merged)
             elif group == "voice" and merged.get("VAPI_API_KEY"):
                 result = await test_vapi(merged["VAPI_API_KEY"])
+            elif group == "cards" and merged.get("PRIVACY_API_KEY"):
+                from ..cards import test_privacy
+                result = await test_privacy(merged["PRIVACY_API_KEY"],
+                                            (merged.get("PRIVACY_SANDBOX") or "").lower() in ("1", "true", "yes"))
             else:
                 result = "Saved."
         except Exception as e:
