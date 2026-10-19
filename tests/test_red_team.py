@@ -149,7 +149,7 @@ async def test_agents_launch_only_what_survives(core, org):
     weak = submit(core, title="Weak")
     red_team(core, weak["id"], revised_scores={k: 2 for k in ideas.SCORE_WEIGHTS})  # author said 4s; the red team says 2s
     r = await approve(weak["id"])
-    assert not r.ok and "red-team score" in r.content
+    assert not r.ok and ("launch bar" in r.content or "proposal.floor" in r.content)
     loss = submit(core, title="Loss maker")
     red_team(core, loss["id"], revised_projection={"time_to_first_revenue_days": 30, "month3_profit_usd": -50,
                                                    "month6_profit_usd": -10})

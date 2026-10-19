@@ -222,3 +222,15 @@ async def test_proposal_ids_and_states_get_helpful_answers(core, org):
     from bizops.decide import referenced_work
     ev = referenced_work(core, f"Submitted {p['id']} to the red team.")
     assert any(PROPOSAL["title"] in v for v in ev.values())
+
+
+async def test_no_per_agent_caps_by_default(core, org):
+    from bizops.engine import spawn_agent
+    core.db.execute("UPDATE agents SET budget_micros = 0 WHERE id IN (?, ?)", (org["researcher"]["id"], org["coo"]["id"]))
+    r = await invoke(Ctx(core=core, agent=org["researcher"]), "web_search", {"query": "lawn care"})
+    assert r.ok, r.content  # only the org and platform caps apply
+    row = spawn_agent(core.db, core.settings, hirer=org["coo"], role="coder", budget_usd=0, focus="site")
+    assert row["parent_agent_id"] == org["coo"]["id"]
+    core.db.execute("UPDATE orgs SET monthly_cap_micros = 1 WHERE id = ?", (org["org"],))
+    r = await invoke(Ctx(core=core, agent=org["researcher"]), "web_search", {"query": "lawn care"})
+    assert not r.ok and "org.monthly_cap" in r.content

@@ -193,7 +193,14 @@ def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str,
         lines.append("\n## The owner's research parameters (for new business ideas)\n" + params_text(get_params(db)))
     from .owner_setup import status_lines
     lines.append("\n## Platform setup (the owner's side; never file it)\n" + "\n".join(status_lines(core, agent["org_id"])))
-    lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} of {fmt_usd(agent['budget_micros'])} this month")
+    from .budget import agent_budgets_enforced
+    if agent_budgets_enforced(core.settings):
+        lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} of {fmt_usd(agent['budget_micros'])} this month")
+    else:
+        org_spent = ledger.spent(db, since=month_start(), org_id=agent["org_id"])
+        org = db.one("SELECT monthly_cap_micros FROM orgs WHERE id = ?", (agent["org_id"],)) or {"monthly_cap_micros": 0}
+        lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} this month (no personal cap); your org has spent "
+                     f"{fmt_usd(org_spent)} of its {fmt_usd(org['monthly_cap_micros'])} monthly cap. Spend where it pays.")
     if "money" in g:
         lines.append(f"- org wallet: {fmt_usd(ledger.wallet_balance(db, agent['org_id']))}")
         for p in payees:

@@ -27,6 +27,12 @@ def platform_caps(settings: Settings) -> tuple[int, int, int]:
     return monthly, daily, ceiling
 
 
+def agent_budgets_enforced(settings: Settings) -> bool:
+    """Per-agent monthly budgets are optional (policy budgets.agent_budgets). Off: an agent is limited only by its
+    org's monthly cap and the platform caps, so no single agent stalls while its business still has budget."""
+    return bool((settings.policy.get("budgets") or {}).get("agent_budgets", False))
+
+
 def check_spend(db: Database | sqlite3.Connection, settings: Settings, *, org: dict,
                 agent: dict | None, amount: int) -> BudgetCheck:
     """Would spending `amount` more break any cap in the tree? Pure check, no writes."""
@@ -44,7 +50,7 @@ def check_spend(db: Database | sqlite3.Connection, settings: Settings, *, org: d
     if org_month + amount > org["monthly_cap_micros"]:
         return BudgetCheck(False, "org.monthly_cap",
                            f"org month spend {fmt_usd(org_month)} + {fmt_usd(amount)} > cap {fmt_usd(org['monthly_cap_micros'])}")
-    if agent is not None:
+    if agent is not None and agent_budgets_enforced(settings):
         a_month = ledger.spent(db, since=ms, agent_id=agent["id"])
         if a_month + amount > agent["budget_micros"]:
             return BudgetCheck(False, "agent.budget",

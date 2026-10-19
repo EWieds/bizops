@@ -37,6 +37,60 @@ def score_total(scores: dict[str, Any]) -> float:
     return round(total, 2)
 
 
+LAUNCH_RULE = {"base": 3.4, "min": 2.8, "max": 4.2,
+               "floors": {"demand": 2.5, "automation_fit": 2.5, "legal_risk": 2.0},
+               "cheap_fast_discount": 0.3, "upside_discount": 0.2, "upside_usd": 10000,
+               "legal_premium": 0.2, "owner_steps_premium": 0.15, "disagreement_premium": 0.15}
+
+
+def launch_bar(settings: Settings, p: dict, review: dict | None = None) -> dict[str, Any]:
+    """The bar a proposal's red-team score must clear to launch, set by its own score breakdown instead of one
+    flat number: cheap, fast tests with real upside get a lower bar (little to lose); legal risk, owner-only
+    steps and an author far more optimistic than the red team raise it. Some criteria have hard floors."""
+    review = review if review is not None else json.loads(p.get("redteam_json") or "{}")
+    rule = {**LAUNCH_RULE, **((settings.policy.get("venture") or {}).get("launch_rule") or {})}
+    rs = {}
+    for k in SCORE_WEIGHTS:
+        try:
+            rs[k] = min(5.0, max(1.0, float((review.get("revised_scores") or {}).get(k, 1))))
+        except (TypeError, ValueError):
+            rs[k] = 1.0
+    bar, why = float(rule["base"]), [f"base {float(rule['base']):.2f}"]
+    cheap_fast = ((rs["cost_to_test"] - 3) / 2 + (rs["time_to_revenue"] - 3) / 2) / 2  # -1 (slow, costly) .. 1
+    if cheap_fast:
+        d = -float(rule["cheap_fast_discount"]) * cheap_fast
+        bar += d
+        why.append(f"{d:+.2f} {'cheap/fast' if d < 0 else 'slow/costly'} test (cost {rs['cost_to_test']:g}, speed "
+                   f"{rs['time_to_revenue']:g})")
+    try:
+        m6 = float((review.get("revised_projection") or {}).get("month6_profit_usd") or 0)
+    except (TypeError, ValueError):
+        m6 = 0.0
+    up = float(rule["upside_usd"])
+    if m6 >= up or m6 >= up / 5:
+        d = -float(rule["upside_discount"]) * (1 if m6 >= up else 0.5)
+        bar += d
+        why.append(f"{d:+.2f} upside (red team month-6 profit ${m6:,.0f})")
+    if rs["legal_risk"] <= 3:
+        bar += float(rule["legal_premium"])
+        why.append(f"+{float(rule['legal_premium']):.2f} legal risk {rs['legal_risk']:g}")
+    if rs["owner_steps"] <= 2:
+        bar += float(rule["owner_steps_premium"])
+        why.append(f"+{float(rule['owner_steps_premium']):.2f} owner-only steps {rs['owner_steps']:g}")
+    author = float(p.get("total_score") or 0)
+    red = score_total(rs)
+    if author - red >= 0.8:
+        bar += float(rule["disagreement_premium"])
+        why.append(f"+{float(rule['disagreement_premium']):.2f} author {author:g} vs red team {red:g}")
+    bar = round(min(float(rule["max"]), max(float(rule["min"]), bar)), 2)
+    floors = [f"{k} {rs[k]:g} < {v:g}" for k, v in (rule.get("floors") or {}).items() if rs.get(k, 5) < float(v)]
+    ok = red >= bar and not floors and m6 > 0
+    return {"bar": bar, "score": red, "clears": ok, "why": why, "floors_failed": floors, "month6_profit_usd": m6,
+            "summary": (f"red-team score {red:g} vs bar {bar:g} ({'; '.join(why)})"
+                        + (f"; below floor: {', '.join(floors)}" if floors else "")
+                        + ("" if m6 > 0 else "; no month-6 profit"))}
+
+
 # ---------------------------------------------------------------- the owner's research parameters
 
 # Guidance the analyst steers by (text) and hard limits enforced on every research proposal (numbers).
@@ -472,16 +526,17 @@ def _notify_platform_ceo(db: Database, settings: Settings, p: dict, review: dict
         return
     v = settings.policy.get("venture", {})
     auto = v.get("auto_launch", True)
-    min_score = float(v.get("auto_launch_min_score", 3.6))
+    lb = launch_bar(settings, p, review)
     rp = review.get("revised_projection") or {}
     head = (f"Reviewed proposal [{p['id']}] '{p['title']}' (source: {p['source']}): red team verdict {p['redteam_verdict']}, "
             f"adjusted score {p['redteam_score']}/5 (author {p['total_score']}/5). Red team projects first revenue in "
             f"{rp.get('time_to_first_revenue_days')} days, month-6 profit ${rp.get('month6_profit_usd')}. "
             f"Case against: {review.get('summary')}")
     if p["status"] == "new":
-        tail = (f" Standing authorization: launch it with decide_proposal(approve) only if the score is >= {min_score}, the "
-                "red team's month-6 profit is positive, and it's within the venture budget; otherwise park it with a reason. "
-                "Tell the owner what you decided and the red team's main objections."
+        tail = (f" Launch bar for this one: {lb['summary']}. It {'CLEARS' if lb['clears'] else 'does NOT clear'} the bar. "
+                "Standing authorization: launch it with decide_proposal(approve) only if it clears and it's within the "
+                "venture budget; otherwise park it with a reason. Tell the owner what you decided and the red team's "
+                "main objections."
                 if auto else " The owner decides launches: recommend a decision to the owner with the red team's objections.")
     elif p["status"] == "revising":
         tail = " It went back to the author for changes; nothing to decide yet."
@@ -558,15 +613,13 @@ def launch_proposal(db: Database, settings: Settings, *, proposal_id: str, actor
     if actor is not None:  # agents launch only what survived the red team; the owner may overrule it
         if p["redteam_verdict"] != "go":
             raise PolicyRefusal("proposal.red_team", f"red team verdict is {p['redteam_verdict']}; only a 'go' can launch")
-        min_score = float(v.get("auto_launch_min_score", 3.6))
-        if (p["redteam_score"] or 0) < min_score:
-            raise PolicyRefusal("proposal.score", f"red-team score {p['redteam_score']} is below {min_score}")
-        try:
-            m6 = float((review.get("revised_projection") or {}).get("month6_profit_usd"))
-        except (TypeError, ValueError):
-            m6 = 0.0
-        if m6 <= 0:
+        lb = launch_bar(settings, p, review)
+        if lb["month6_profit_usd"] <= 0:
             raise PolicyRefusal("proposal.profit", "the red team doesn't see a profit by month 6")
+        if lb["floors_failed"]:
+            raise PolicyRefusal("proposal.floor", f"below a hard floor: {', '.join(lb['floors_failed'])}")
+        if not lb["clears"]:
+            raise PolicyRefusal("proposal.score", f"doesn't clear its launch bar: {lb['summary']}")
         made = int(db.scalar("SELECT COUNT(*) AS n FROM proposals WHERE status = 'launched' AND updated_at >= ? "
                              "AND decided_by != 'human'", (month_start(),)) or 0)
         if made >= int(v.get("max_new_orgs_per_month", 2)):

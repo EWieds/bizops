@@ -38,6 +38,10 @@ hard_stops:
   billing_dispute: "Responding to a chargeback in Stripe (agents never contact a customer who disputed)"
   browser_assist: "A website step only a person can do: a CAPTCHA, a code sent to the owner's phone, an ID or selfie check"
 
+budgets:
+  agent_budgets: false        # per-agent monthly budgets. false: agents are limited only by their org's monthly cap
+                              # and the platform caps above (no agent stalls while its business still has budget)
+
 # Per-agent per-hour rate limits by tool name. '*' is the default for unlisted tools.
 rate_limits:
   "*": 120
@@ -143,7 +147,22 @@ venture:
   research_every_days: 3          # the venture analyst runs a research cycle on its own this often (0 = off)
   proposals_per_cycle: 3
   auto_launch: true               # the platform CEO may launch strong proposals itself, inside the limits above
-  auto_launch_min_score: 3.6      # out of 5, on the RED TEAM's scores (not the author's)
+  youtube:                        # YouTube channels the owner adds on the Ideas page (idea_sources.py)
+    check_hours: 6                # how often each channel's feed is checked
+    backfill_videos: 3            # when a channel is added, its latest N videos are researched; older ones skipped
+    max_videos_per_check: 3       # per channel per check
+    min_transcript_chars: 1500    # shorter transcripts (shorts) are skipped
+  launch_rule:                    # the bar the RED TEAM's weighted score (out of 5) must clear, set per proposal
+    base: 3.4                     # from its score breakdown (ideas.launch_bar), clamped to [min, max]
+    min: 2.8
+    max: 4.2
+    floors: {demand: 2.5, automation_fit: 2.5, legal_risk: 2.0}   # any of these below its floor: no launch
+    cheap_fast_discount: 0.3      # bar drops up to this for a cheap, fast test (rises for a slow, costly one)
+    upside_discount: 0.2          # bar drops this much when red-team month-6 profit >= upside_usd (half at 1/5 of it)
+    upside_usd: 10000
+    legal_premium: 0.2            # bar rises when legal_risk <= 3
+    owner_steps_premium: 0.15     # bar rises when owner_steps <= 2 (lots for the owner to do)
+    disagreement_premium: 0.15    # bar rises when the author scored it 0.8+ above the red team
   red_team_max_rounds: 3          # fix -> revise cycles before a proposal is parked
 
 # Quality bar: outbound work is scored against a professional rubric (0-4) before it ships, by Jev when

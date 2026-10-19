@@ -12,6 +12,7 @@ import json
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -692,7 +693,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         rows = db.all("SELECT p.*, o.name AS org_name FROM proposals p LEFT JOIN orgs o ON o.id = p.org_id "
                       "ORDER BY CASE p.status WHEN 'new' THEN 0 WHEN 'red_team' THEN 1 WHEN 'revising' THEN 1 WHEN 'parked' THEN 2 "
                       "WHEN 'launched' THEN 3 ELSE 4 END, COALESCE(p.redteam_score, p.total_score) DESC, p.created_at DESC LIMIT 100")
-        from ..ideas import case_text
+        from ..ideas import case_text, launch_bar
         for r in rows:
             r["scores"] = loads(r["scores_json"], {})
             r["evidence"] = loads(r["evidence_json"], [])
@@ -700,10 +701,13 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             r["case_text"] = case_text(r["case"]) if r["case"] else ""
             r["checks"] = loads(r["checks_json"], [])
             r["rt"] = loads(r["redteam_json"], None)
+            r["bar"] = launch_bar(settings, r, r["rt"]) if r["rt"] else None
         root = root_org(db)
         analyst = db.one("SELECT * FROM agents WHERE role = 'venture_analyst' AND status = 'active' ORDER BY created_at LIMIT 1")
         from ..ideas import PARAM_CHOICES, PARAM_LIMITS, PARAM_TEXT, get_params
-        return page(request, "ideas.html", proposals=rows, weights=SCORE_WEIGHTS, analyst=analyst,
+        sources = db.all("SELECT s.*, (SELECT COUNT(*) FROM idea_source_items i WHERE i.source_id = s.id AND i.status = 'sent') "
+                         "AS sent FROM idea_sources s ORDER BY s.created_at")
+        return page(request, "ideas.html", proposals=rows, weights=SCORE_WEIGHTS, analyst=analyst, sources=sources,
                     params=get_params(db), param_text=PARAM_TEXT, param_limits=PARAM_LIMITS, param_choices=PARAM_CHOICES,
                     pceo=org_ceo(db, root["id"]) if root else None, venture=settings.policy.get("venture", {}),
                     last_cycle=get_setting(db, "ideas:last_cycle", ""))
@@ -737,6 +741,30 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             research_cycle(db, settings, force=True)
             scheduler.poke()
         return RedirectResponse("/ideas?saved=1", status_code=303)
+
+    @app.post("/ideas/sources")
+    async def ideas_source_add(request: Request, url: str = Form(...)):
+        from ..idea_sources import add_channel
+        try:
+            src = await add_channel(core, url)
+        except PolicyRefusal as e:
+            return RedirectResponse(f"/ideas?source_err={quote(e.detail)}", status_code=303)
+        except Exception as e:
+            return RedirectResponse(f"/ideas?source_err={quote(type(e).__name__ + ': ' + str(e)[:150])}", status_code=303)
+        return RedirectResponse(f"/ideas?source_added={quote(src['title'])}", status_code=303)
+
+    @app.post("/ideas/sources/{sid}/{action}")
+    async def ideas_source_action(request: Request, sid: str, action: str):
+        from ..idea_sources import poll
+        if action == "toggle":
+            db.execute("UPDATE idea_sources SET status = CASE status WHEN 'active' THEN 'paused' ELSE 'active' END WHERE id = ?",
+                       (sid,))
+        elif action == "check":
+            await poll(core, force=True)
+            scheduler.poke()
+        else:
+            raise HTTPException(404)
+        return back(request, "/ideas")
 
     @app.post("/ideas/research-now")
     async def ideas_research_now(request: Request):

@@ -215,13 +215,17 @@ def spawn_agent(db: Database, settings: Settings, *, hirer: dict, role: str, nam
                               (hirer["id"],)) or 0)
     if n_reports >= max_reports:
         raise PolicyRefusal("spawn.max_reports", f"you already have {max_reports} reports")
-    amount = usd_to_micros(budget_usd)
-    if amount <= 0:
-        raise PolicyRefusal("spawn.budget", "give the new agent a budget (budget_usd > 0) from your own budget")
-    spent = ledger.spent(db, since=month_start(), agent_id=hirer["id"])
-    available = hirer["budget_micros"] - spent
-    if amount > available - usd_to_micros(1):
-        raise PolicyRefusal("spawn.budget", f"you have ${available / 1e6:.2f} left this month and must keep $1 for yourself")
+    amount = usd_to_micros(budget_usd or 0)
+    enforced = budget.agent_budgets_enforced(settings)
+    if enforced:
+        if amount <= 0:
+            raise PolicyRefusal("spawn.budget", "give the new agent a budget (budget_usd > 0) from your own budget")
+        spent = ledger.spent(db, since=month_start(), agent_id=hirer["id"])
+        available = hirer["budget_micros"] - spent
+        if amount > available - usd_to_micros(1):
+            raise PolicyRefusal("spawn.budget", f"you have ${available / 1e6:.2f} left this month and must keep $1 for yourself")
+    else:
+        amount = 0  # no personal budgets: the hire shares the org's monthly cap
     hirer_grants = set(grants(hirer))
     role_grants = list(role_def.get("grants", []))
     # A hire never gets money or platform access its manager doesn't have.

@@ -3,6 +3,17 @@
 <div class="flex flex-wrap items-center gap-3 mb-1"><h1 class="text-2xl font-semibold">Ideas</h1>
 <form method="post" action="/ideas/research-now"><button class="text-xs px-3 py-1.5 rounded-md bg-slate-900 text-white">Research new ideas now</button></form>
 {% if pceo %}<a href="/chat?agent={{ pceo.id }}" class="text-xs px-3 py-1.5 rounded-md border">Pitch your own idea (chat)</a>{% endif %}</div>
+<details class="card" {{ 'open' if request.query_params.get('source_added') or request.query_params.get('source_err') }}>
+  <summary class="cursor-pointer font-semibold">YouTube channels <span class="pill {{ 'o-ok' if sources else 'o-muted' }}">{{ sources|length }}</span>{% if request.query_params.get('source_added') %} <span class="pill o-ok">added {{ request.query_params.get('source_added') }}</span>{% endif %}</summary>
+  <p class="text-xs text-slate-500 mt-1">Add a channel and its new videos become ideas: every few hours the transcript of each new video goes to the venture analyst, who turns what fits your research parameters into proposals for the red team. Adding a channel researches its latest few videos.</p>
+  {% if request.query_params.get('source_err') %}<div class="bg-red-100 text-red-900 p-2 rounded my-2 text-xs">{{ request.query_params.get('source_err') }}</div>{% endif %}
+  <form method="post" action="/ideas/sources" class="flex gap-2 mt-2 text-xs"><input name="url" required placeholder="https://www.youtube.com/@channel or @handle" class="border rounded p-1.5 flex-1"><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white">Add channel</button></form>
+  {% for s in sources %}<div class="border-t mt-2 pt-2 flex flex-wrap gap-2 items-center text-xs"><a class="font-semibold underline" href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title }}</a>
+    <span class="pill {{ 'o-ok' if s.status == 'active' else 'o-muted' }}">{{ s.status }}</span><span class="text-slate-500">{{ s.sent }} videos researched · checked {{ s.last_checked_at|ago if s.last_checked_at else 'not yet' }}</span>
+    {% if s.last_error %}<span class="text-red-700">{{ s.last_error }}</span>{% endif %}
+    <form method="post" action="/ideas/sources/{{ s.id }}/check"><button class="underline">check now</button></form>
+    <form method="post" action="/ideas/sources/{{ s.id }}/toggle"><button class="underline">{{ 'pause' if s.status == 'active' else 'resume' }}</button></form></div>{% endfor %}
+</details>
 <details class="card" {{ 'open' if request.query_params.get('saved') }}>
   <summary class="cursor-pointer font-semibold">Research parameters{% if params %} <span class="pill o-ok">{{ params|length }} set</span>{% else %} <span class="pill o-muted">none set</span>{% endif %}{% if request.query_params.get('saved') %} <span class="pill o-ok">saved</span>{% endif %}</summary>
   <p class="text-xs text-slate-500 mt-1">Steer the venture analyst. The guidance fields shape what it researches. The limits are enforced in code: research proposals outside them are refused. Your own ideas may break them (they get flagged instead). The red team also checks every proposal against these.</p>
@@ -22,13 +33,13 @@
 {% if request.query_params.get('submitted') %}<div class="card bg-green-50 text-green-900 text-sm">Got your idea. The analyst is writing the full business case; then the red team attacks it (your own ideas get the toughest review). You'll get the verdict in chat.</div>{% endif %}
 <p class="text-slate-500 mb-4">The venture analyst researches on its own every {{ venture.research_every_days }} days (last: {{ last_cycle|ago }}) and submits scored proposals.
 Every proposal is attacked by an independent red team before it can launch; the score shown is the red team's.
-{% if venture.auto_launch %}The platform CEO may launch red-team "go" proposals scoring ≥ {{ venture.auto_launch_min_score }}/5 itself, within your venture limits ({{ venture.max_new_orgs_per_month }}/month, {{ venture.max_on_trial }} on trial).{% else %}You decide every launch.{% endif %}
+{% if venture.auto_launch %}The platform CEO may launch red-team "go" proposals that clear their own launch bar (set from the red team's score breakdown: lower for cheap, fast tests with real upside, higher for legal risk, owner-only steps or an over-optimistic author; with minimum floors on demand, deliverability and legal risk) itself, within your venture limits ({{ venture.max_new_orgs_per_month }}/month, {{ venture.max_on_trial }} on trial).{% else %}You decide every launch.{% endif %}
 "Launch now" is yours and skips those limits.</p>
 {% for p in proposals %}
 <section class="card {{ 'opacity-60' if p.status in ('rejected',) }}">
   <div class="flex flex-wrap items-start gap-3">
     {% set sc = p.redteam_score if p.redteam_score is not none else p.total_score %}
-    <div class="text-center w-16 flex-none"><div class="text-2xl font-bold {{ 'text-green-700' if sc >= 3.6 else 'text-amber-700' if sc >= 3 else 'text-slate-500' }}">{{ '%.1f'|format(sc) }}</div><div class="text-[10px] text-slate-500">{{ 'red team' if p.redteam_score is not none else 'author, unreviewed' }}</div></div>
+    <div class="text-center w-16 flex-none"><div class="text-2xl font-bold {{ ('text-green-700' if p.bar.clears else 'text-amber-700') if p.bar else 'text-slate-500' }}">{{ '%.1f'|format(sc) }}</div><div class="text-[10px] text-slate-500">{{ 'red team' if p.redteam_score is not none else 'author, unreviewed' }}</div>{% if p.bar %}<div class="text-[10px] {{ 'text-green-700' if p.bar.clears else 'text-amber-700' }}" title="{{ p.bar.summary }}">bar {{ '%.2f'|format(p.bar.bar) }}{{ ' ✓' if p.bar.clears else '' }}</div>{% endif %}</div>
     <div class="flex-1 min-w-0">
       <div class="flex flex-wrap items-center gap-2"><h2 class="!mb-0">{{ p.title }}</h2><span class="pill {{ 'o-ok' if p.status == 'launched' else 'o-pending' if p.status == 'new' else 'o-muted' }}">{{ p.status }}</span><span class="pill o-muted">{{ p.template }}</span><span class="pill o-muted">from {{ p.source }}</span>{% if p.redteam_verdict %}<span class="pill {{ 'o-ok' if p.redteam_verdict == 'go' else 'o-pending' if p.redteam_verdict == 'fix' else 'o-refused' }}">red team: {{ p.redteam_verdict.replace('_', '-') }}</span>{% elif p.status == 'red_team' %}<span class="pill o-pending">with the red team</span>{% endif %}<span class="text-xs text-slate-500">{{ p.created_at|ago }}</span></div>
       <p class="mt-1">{{ p.summary }}</p>

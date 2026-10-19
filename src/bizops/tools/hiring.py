@@ -8,15 +8,16 @@ from . import Ctx, ToolOutput, tool
 
 @tool("spawn_agent", grant="hire", action_class="internal", ref_type="agent",
       description="Hire a new report under you from the role library (e.g. researcher, writer, coder, designer, "
-                  "sales, marketer, accountant, hr). Its budget comes out of your own. Org headcount, depth and "
-                  "reports-per-manager limits apply.",
+                  "sales, marketer, accountant, hr). It shares your org's monthly budget (unless the owner turned on "
+                  "per-agent budgets: then budget_usd moves from yours). Org headcount, depth and reports-per-manager "
+                  "limits apply.",
       properties={"role": {"type": "string"}, "name": {"type": "string"},
-                  "budget_usd": {"type": "number", "description": "monthly budget moved from your budget"},
+                  "budget_usd": {"type": "number", "description": "only with per-agent budgets: moved from your budget"},
                   "focus": {"type": "string", "description": "what this hire specializes in here"}},
-      required=["role", "budget_usd", "focus"])
+      required=["role", "focus"])
 async def spawn_agent_tool(ctx: Ctx, args: dict) -> ToolOutput:
     row = spawn_agent(ctx.db, ctx.settings, hirer=ctx.agent, role=args["role"], name=args.get("name"),
-                      budget_usd=float(args["budget_usd"]), focus=args.get("focus", ""))
+                      budget_usd=float(args.get("budget_usd") or 0), focus=args.get("focus", ""))
     return ToolOutput({"agent_id": row["id"], "name": row["name"], "role": row["role"],
                        "budget": f"${row['budget_micros'] / 1e6:.2f}"}, ref_type="agent", ref_id=row["id"])
 

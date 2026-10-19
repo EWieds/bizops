@@ -108,6 +108,13 @@ that proxy. The public voice demo goes through `gateway.public_model_call`: kill
 per-business daily ceiling are checked BEFORE the model call.
 
 ## Ideas pipeline (ideas.py, tools/ideas.py)
+Launch bar (`ideas.launch_bar`, policy `venture.launch_rule`): agents may launch only a red-team "go" whose
+red-team score clears a bar set from its own breakdown: lower for a cheap, fast test with real month-6 upside,
+higher for legal risk, many owner-only steps, or an author far more optimistic than the red team; hard floors
+on demand, deliverability (automation_fit) and legal risk; a positive month-6 profit is always required.
+YouTube channels (`idea_sources.py`): the owner adds channels on the Ideas page; each channel's public feed
+is checked every few hours, and each new video's transcript is saved and handed to the venture analyst as a
+task to turn into proposals (which then go through the red team like any other).
 maintenance runs research_cycle every venture.research_every_days: it tasks the venture analyst, who
 submits proposals (submit_proposal: weighted 1-5 scores, sourced evidence, plan, kill criteria; duplicates
 refused) with a full business case: price + model + sourced competitor prices, exactly who the first 10
@@ -162,7 +169,8 @@ Model calls get the same treatment (`llm.call`): kill switch + budget checked be
 cost written to the ledger after.
 
 ## Safety model
-- Caps/budgets are code, set in `config/policy.yaml`. Agents cannot raise them; v0 cap-raise rule in
+- Caps/budgets are code, set in `config/policy.yaml`. Per-agent monthly budgets are off by default
+  (`budgets.agent_budgets`): agents are limited by their org's monthly cap and the platform caps. Agents cannot raise them; v0 cap-raise rule in
   `policy.max_allowed_cap` (2 profitable months, +25%/month max, hard ceiling).
 - Agents never see secrets. Tools read credentials via `Settings.secret()`.
 - Internet (`webclient.py`): async httpx, shared pool, concurrency limit, timeouts, byte caps, cache,

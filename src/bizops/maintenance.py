@@ -299,11 +299,11 @@ async def poll_connectors(core) -> dict[str, int]:
     """Pull new replies from the mailbox and new payments from the billing provider; renew monthly
     purchases (debit the wallet or pause the card); close browser tabs nobody is using; close setup items
     whose connection now works."""
-    from . import business, owner_setup, purchases
+    from . import business, idea_sources, owner_setup, purchases
     out: dict[str, int] = {}
     for name, fn in (("emails_in", business.poll_email), ("payments_in", business.poll_billing),
                      ("renewals", purchases.renew_due), ("tabs_closed", lambda c: c.browser.close_idle()),
-                     ("setup_connected", owner_setup.resolve_connected)):
+                     ("setup_connected", owner_setup.resolve_connected), ("youtube_videos", idea_sources.poll)):
         try:
             out[name] = await fn(core)
         except Exception as e:
