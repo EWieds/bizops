@@ -126,6 +126,11 @@ budget; the owner can overrule from /ideas (recorded as an override). Owner idea
 go through the analyst and red team like everything else; there is no direct create-business path. On
 launch the brief carries the business case and red-team review, and two measured goals are seeded (first
 paying customer by the red team's timeline; revenue on plan for 60 days).
+Owner research parameters (Ideas page, stored in settings `venture:params`): guidance (focus, avoid,
+geography, customer type, models, risk tolerance, owner involvement, notes) is shown to the analyst, red team
+and platform CEO on every wake and in research/red-team tasks; hard limits (max startup / monthly cost, max
+days to first revenue, min price, min month-6 profit) refuse research proposals in code and only flag the
+owner's own ideas.
 
 ## Chat and media (web/app.py chat_post, media.py)
 Owner messages can carry files (PDF/DOCX/text/CSV: original + extracted text saved as artifacts) and

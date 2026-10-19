@@ -37,6 +37,98 @@ def score_total(scores: dict[str, Any]) -> float:
     return round(total, 2)
 
 
+# ---------------------------------------------------------------- the owner's research parameters
+
+# Guidance the analyst steers by (text) and hard limits enforced on every research proposal (numbers).
+PARAM_TEXT = {
+    "focus": "Markets, industries or kinds of business to explore",
+    "avoid": "Industries, ideas or business types to stay away from",
+    "geography": "Where the customers should be",
+    "customer_type": "b2b, b2c or either",
+    "business_models": "Preferred business models (e.g. subscriptions, done-for-you services)",
+    "risk_tolerance": "low, medium or high",
+    "owner_involvement": "How much the owner is willing to do personally",
+    "notes": "Anything else the analyst should know",
+}
+PARAM_LIMITS = {
+    "max_startup_usd": "Max startup cost (USD)",
+    "max_monthly_cost_usd": "Max monthly running cost (USD)",
+    "max_days_to_first_revenue": "Max days to the first payment",
+    "min_price_usd": "Min price per sale or per month (USD)",
+    "min_month6_profit_usd": "Min projected profit in month 6 (USD)",
+}
+PARAM_CHOICES = {"customer_type": ("b2b", "b2c", "either"), "risk_tolerance": ("low", "medium", "high")}
+PARAMS_KEY = "venture:params"
+
+
+def get_params(db: Database) -> dict[str, Any]:
+    try:
+        return json.loads(get_setting(db, PARAMS_KEY, "") or "{}")
+    except ValueError:
+        return {}
+
+
+def set_params(db: Database, values: dict[str, Any]) -> dict[str, Any]:
+    """Owner-only (dashboard): blank fields are cleared."""
+    out: dict[str, Any] = {}
+    for k in PARAM_TEXT:
+        v = str(values.get(k) or "").strip()[:1000]
+        if v and k in PARAM_CHOICES and v.lower() not in PARAM_CHOICES[k]:
+            raise PolicyRefusal("params.choice", f"{k} must be one of {', '.join(PARAM_CHOICES[k])}")
+        if v:
+            out[k] = v.lower() if k in PARAM_CHOICES else v
+    for k in PARAM_LIMITS:
+        v = values.get(k)
+        if v in (None, ""):
+            continue
+        try:
+            out[k] = float(v)
+        except (TypeError, ValueError):
+            raise PolicyRefusal("params.number", f"{PARAM_LIMITS[k]} must be a number")
+        if out[k] < 0 and k != "min_month6_profit_usd":
+            raise PolicyRefusal("params.number", f"{PARAM_LIMITS[k]} can't be negative")
+    set_setting(db, PARAMS_KEY, json.dumps(out))
+    log_event(db, actor_kind="human", kind="human", action="venture.params", args=out, outcome="ok")
+    return out
+
+
+def params_text(params: dict[str, Any]) -> str:
+    if not params:
+        return "(none set: use your judgment, prefer B2B, cheap to test, fast to first payment)"
+    lines = [f"- {PARAM_TEXT[k]}: {params[k]}" for k in PARAM_TEXT if params.get(k)]
+    lines += [f"- HARD LIMIT, {PARAM_LIMITS[k]}: {params[k]:g}" for k in PARAM_LIMITS if params.get(k) is not None]
+    return "\n".join(lines)
+
+
+def param_violations(case: dict, params: dict[str, Any]) -> list[str]:
+    """The owner's hard limits checked against a validated business case."""
+    out = []
+    lim = params.get
+    if lim("max_startup_usd") is not None and case["costs"]["startup_usd"] > lim("max_startup_usd"):
+        out.append(f"startup cost ${case['costs']['startup_usd']:,.0f} > the owner's max ${lim('max_startup_usd'):,.0f}")
+    if lim("max_monthly_cost_usd") is not None and case["costs"]["monthly_usd"] > lim("max_monthly_cost_usd"):
+        out.append(f"monthly cost ${case['costs']['monthly_usd']:,.0f} > the owner's max ${lim('max_monthly_cost_usd'):,.0f}")
+    if lim("max_days_to_first_revenue") is not None and case["time_to_first_revenue_days"] > lim("max_days_to_first_revenue"):
+        out.append(f"first revenue in {case['time_to_first_revenue_days']:.0f} days > the owner's max "
+                   f"{lim('max_days_to_first_revenue'):.0f}")
+    if lim("min_price_usd") is not None and case["pricing"]["price_usd"] < lim("min_price_usd"):
+        out.append(f"price ${case['pricing']['price_usd']:,.2f} < the owner's min ${lim('min_price_usd'):,.2f}")
+    if lim("min_month6_profit_usd") is not None:
+        m6 = next((r["profit_usd"] for r in case["projections"] if r["month"] == 6), None)
+        if m6 is None or m6 < lim("min_month6_profit_usd"):
+            out.append(f"month-6 profit {'not projected' if m6 is None else f'${m6:,.0f}'} < the owner's min "
+                       f"${lim('min_month6_profit_usd'):,.0f}")
+    return out
+
+
+def _apply_params(db: Database, case: dict, flags: list[str], source: str) -> None:
+    """Research proposals must fit the owner's hard limits; the owner's own ideas may break them (flagged)."""
+    bad = param_violations(case, get_params(db))
+    if bad and source != "owner":
+        raise PolicyRefusal("proposal.params", "outside the owner's research parameters: " + "; ".join(bad))
+    flags.extend(f"breaks the owner's own limit: {b}" for b in bad)
+
+
 # ---------------------------------------------------------------- the business case
 
 PRICE_MODELS = ("one_time", "monthly", "annual", "usage")
@@ -180,6 +272,7 @@ def submit_proposal(db: Database, settings: Settings, *, author: dict | None, fi
                                                       "propose something different or improve that one")
     budget = float(fields.get("starting_budget_usd") or 50)
     case, flags = validate_case(fields.get("business_case"), starting_budget_usd=budget)
+    _apply_params(db, case, flags, fields.get("source") or "research")
     templates = settings.policy.get("venture", {}).get("templates", ["generic"])
     template = fields.get("template") or "generic"
     if template not in templates:
@@ -218,6 +311,7 @@ def revise_proposal(db: Database, settings: Settings, *, author: dict | None, pr
               "business_case": json.loads(p["business_case_json"]), **fields}
     budget = float(merged.get("starting_budget_usd") or 50)
     case, flags = validate_case(merged["business_case"], starting_budget_usd=budget)
+    _apply_params(db, case, flags, p["source"])
     db.execute("UPDATE proposals SET summary = ?, thesis = ?, target_customer = ?, offer = ?, plan = ?, kill_criteria = ?, "
                "starting_budget_usd = ?, evidence_json = ?, scores_json = ?, total_score = ?, business_case_json = ?, "
                "checks_json = ?, review_round = review_round + 1, status = 'red_team', updated_at = ? WHERE id = ?",
@@ -238,8 +332,11 @@ pay it, against the competitors cited?), the first 10 customers (exactly who, re
 answer?), the acquisition cost and conversion assumptions, the delivery (can our agents really do it without
 the owner?), the costs, the projections, legal and platform risk, and the kill criteria. Do your own
 research and cite counter-evidence. Recompute the projections with your own, more conservative numbers.
+Also check it fits the owner's research parameters (below); a poor fit is a reason for fix or no_go.
 Then call red_team_review with verdict go (launch as is), fix (specific required changes) or no_go.
 {owner_note}
+The owner's research parameters:
+{params}
 Code sanity checks already flagged: {flags}
 
 {brief}"""
@@ -270,7 +367,8 @@ def send_to_red_team(db: Database, settings: Settings, p: dict, *, response: str
                 description=RED_TEAM_BRIEF.format(id=p["id"], round=p["review_round"], title=p["title"], source=p["source"],
                                                   owner_note=OWNER_NOTE.format(risks=risks, counter=counter)
                                                   if p["source"] == "owner" else "",
-                                                  flags="; ".join(flags) or "none", brief=brief))
+                                                  flags="; ".join(flags) or "none", brief=brief,
+                                                  params=params_text(get_params(db))))
 
 
 def record_red_team(db: Database, settings: Settings, *, reviewer: dict, proposal_id: str, review: dict[str, Any]) -> dict:
@@ -495,15 +593,16 @@ def decide(db: Database, *, proposal_id: str, status: str, actor: dict | None, r
                (status, actor["id"] if actor else "human", reason, iso(), proposal_id))
 
 
-def research_cycle(db: Database, settings: Settings) -> bool:
-    """Every N days, give the venture analyst a research task (code only; the analyst does the work)."""
+def research_cycle(db: Database, settings: Settings, *, force: bool = False) -> bool:
+    """Every N days (or now, when the owner asks), give the venture analyst a research task."""
     v = settings.policy.get("venture", {})
     every = float(v.get("research_every_days", 3)) * 86400
-    if every <= 0:
-        return False
-    last = parse_iso(get_setting(db, "ideas:last_cycle", ""))
-    if last and (now() - last).total_seconds() < every:
-        return False
+    if not force:
+        if every <= 0:
+            return False
+        last = parse_iso(get_setting(db, "ideas:last_cycle", ""))
+        if last and (now() - last).total_seconds() < every:
+            return False
     root = root_org(db)
     if not root:
         return False
@@ -522,7 +621,9 @@ def research_cycle(db: Database, settings: Settings) -> bool:
                 description=("Scan markets, trends and what's working in our portfolio. Prefer B2B offers our agents can "
                              "build, sell by email and deliver themselves, with a first payment possible in 2-3 weeks and "
                              "low legal risk. Skip ideas we already proposed (list_proposals). Score honestly and use "
-                             "conservative numbers in the business case: the red team will attack every one."))
+                             "conservative numbers in the business case: the red team will attack every one.\n\n"
+                             "The owner's research parameters (stay inside them; hard limits are enforced on submit):\n"
+                             + params_text(get_params(db))))
     return True
 
 

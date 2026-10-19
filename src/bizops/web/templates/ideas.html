@@ -3,6 +3,22 @@
 <div class="flex flex-wrap items-center gap-3 mb-1"><h1 class="text-2xl font-semibold">Ideas</h1>
 <form method="post" action="/ideas/research-now"><button class="text-xs px-3 py-1.5 rounded-md bg-slate-900 text-white">Research new ideas now</button></form>
 {% if pceo %}<a href="/chat?agent={{ pceo.id }}" class="text-xs px-3 py-1.5 rounded-md border">Pitch your own idea (chat)</a>{% endif %}</div>
+<details class="card" {{ 'open' if request.query_params.get('saved') }}>
+  <summary class="cursor-pointer font-semibold">Research parameters{% if params %} <span class="pill o-ok">{{ params|length }} set</span>{% else %} <span class="pill o-muted">none set</span>{% endif %}{% if request.query_params.get('saved') %} <span class="pill o-ok">saved</span>{% endif %}</summary>
+  <p class="text-xs text-slate-500 mt-1">Steer the venture analyst. The guidance fields shape what it researches. The limits are enforced in code: research proposals outside them are refused. Your own ideas may break them (they get flagged instead). The red team also checks every proposal against these.</p>
+  <form method="post" action="/ideas/params" class="grid md:grid-cols-2 gap-x-4 gap-y-2 mt-2 text-xs">
+    {% for k, label in param_text.items() %}
+      <label>{{ label }}<br>
+      {% if k in param_choices %}<select name="{{ k }}" class="border rounded p-1.5 w-full"><option value="">(no preference)</option>{% for c in param_choices[k] %}<option {{ 'selected' if params.get(k) == c }}>{{ c }}</option>{% endfor %}</select>
+      {% else %}<textarea name="{{ k }}" rows="{{ 3 if k in ('focus', 'avoid', 'notes') else 1 }}" class="border rounded p-1.5 w-full">{{ params.get(k, '') }}</textarea>{% endif %}</label>
+    {% endfor %}
+    {% for k, label in param_limits.items() %}
+      <label>{{ label }}<br><input name="{{ k }}" value="{{ '%g'|format(params[k]) if params.get(k) is not none else '' }}" inputmode="decimal" class="border rounded p-1.5 w-full" placeholder="no limit"></label>
+    {% endfor %}
+    <div class="md:col-span-2 flex gap-2"><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white">Save</button>
+    <button name="research_now" value="1" class="px-3 py-1.5 rounded-md border">Save and research now</button></div>
+  </form>
+</details>
 {% if request.query_params.get('submitted') %}<div class="card bg-green-50 text-green-900 text-sm">Got your idea. The analyst is writing the full business case; then the red team attacks it (your own ideas get the toughest review). You'll get the verdict in chat.</div>{% endif %}
 <p class="text-slate-500 mb-4">The venture analyst researches on its own every {{ venture.research_every_days }} days (last: {{ last_cycle|ago }}) and submits scored proposals.
 Every proposal is attacked by an independent red team before it can launch; the score shown is the red team's.

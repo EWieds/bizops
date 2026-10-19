@@ -681,7 +681,9 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             r["rt"] = loads(r["redteam_json"], None)
         root = root_org(db)
         analyst = db.one("SELECT * FROM agents WHERE role = 'venture_analyst' AND status = 'active' ORDER BY created_at LIMIT 1")
+        from ..ideas import PARAM_CHOICES, PARAM_LIMITS, PARAM_TEXT, get_params
         return page(request, "ideas.html", proposals=rows, weights=SCORE_WEIGHTS, analyst=analyst,
+                    params=get_params(db), param_text=PARAM_TEXT, param_limits=PARAM_LIMITS, param_choices=PARAM_CHOICES,
                     pceo=org_ceo(db, root["id"]) if root else None, venture=settings.policy.get("venture", {}),
                     last_cycle=get_setting(db, "ideas:last_cycle", ""))
 
@@ -699,12 +701,28 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             decide(db, proposal_id=pid, status="parked" if decision == "park" else "rejected", actor=None, reason=reason)
         return back(request, "/ideas")
 
+    @app.post("/ideas/params")
+    async def ideas_params(request: Request):
+        """The owner's research parameters for the venture analyst (and the red team's fit check)."""
+        from ..engine import set_setting
+        from ..ideas import research_cycle, set_params
+        form = dict(await request.form())
+        try:
+            set_params(db, form)
+        except PolicyRefusal as e:
+            raise HTTPException(400, e.detail)
+        if form.get("research_now"):
+            set_setting(db, "ideas:last_cycle", "")
+            research_cycle(db, settings, force=True)
+            scheduler.poke()
+        return RedirectResponse("/ideas?saved=1", status_code=303)
+
     @app.post("/ideas/research-now")
     async def ideas_research_now(request: Request):
         from ..engine import set_setting
         from ..ideas import research_cycle
         set_setting(db, "ideas:last_cycle", "")
-        research_cycle(db, settings)
+        research_cycle(db, settings, force=True)
         scheduler.poke()
         return back(request, "/ideas")
 
