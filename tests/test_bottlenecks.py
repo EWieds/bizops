@@ -234,3 +234,27 @@ async def test_no_per_agent_caps_by_default(core, org):
     core.db.execute("UPDATE orgs SET monthly_cap_micros = 1 WHERE id = ?", (org["org"],))
     r = await invoke(Ctx(core=core, agent=org["researcher"]), "web_search", {"query": "lawn care"})
     assert not r.ok and "org.monthly_cap" in r.content
+
+
+def test_email_settings_are_cleaned_and_both_ports_tried(monkeypatch):
+    from bizops.web import connect
+    env = connect.clean_email_settings({"SMTP_HOST": " https://smtp.gmail.com:587/ ", "SMTP_PORT": " 993",
+                                        "SMTP_USER": "hello@x.com ", "SMTP_PASSWORD": "abcd efgh ijkl mnop"})
+    assert env["SMTP_HOST"] == "smtp.gmail.com" and env["SMTP_PASSWORD"] == "abcdefghijklmnop"
+    assert env["SMTP_USER"] == "hello@x.com"
+    tried = []
+
+    def fake(host, port, user, pw):
+        tried.append(port)
+        if port != 465:
+            raise RuntimeError(f"SMTP {host}:{port} failed at connect: SMTPServerDisconnected")
+
+    monkeypatch.setattr(connect, "_smtp_login", fake)
+    assert "Email sending works" in connect.test_smtp(env) and tried == [993, 465] and env["SMTP_PORT"] == "465"
+
+    def bad_login(host, port, user, pw):
+        raise RuntimeError(f"SMTP {host}:{port} failed at login: SMTPAuthenticationError: 535")
+
+    monkeypatch.setattr(connect, "_smtp_login", bad_login)
+    with pytest.raises(RuntimeError, match="failed at login"):
+        connect.test_smtp({**env, "SMTP_PORT": "587"})
