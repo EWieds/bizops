@@ -247,6 +247,7 @@ async def _critique(core, org_id: str, kind: str, state: dict, ask: str, rubric:
 
 
 ART_REF = re.compile(r"\bart_[0-9a-f]{12,}\b")
+PROP_REF = re.compile(r"\bprop_[0-9a-f]{12,}\b")
 KB_REF = re.compile(r"\bKB(?:\s+(?:entry|key|note))?\s*[:'\"`(]?\s*([A-Za-z0-9_][A-Za-z0-9_.\-]{2,79})")
 
 
@@ -263,6 +264,14 @@ def referenced_work(core, result: str, limit_chars: int = 6000) -> dict[str, str
                 continue
             out[f"{aid} ({row['name']})"] = clip(text, min(3000, budget))
             budget -= len(out[f"{aid} ({row['name']})"])
+    for pid in dict.fromkeys(PROP_REF.findall(result)):
+        row = db.one("SELECT * FROM proposals WHERE id LIKE ? ORDER BY id LIMIT 1", (pid + "%",))
+        if row and budget > 0:
+            fields = {k: row.get(k) for k in ("title", "status", "summary", "offer", "total_score", "review_round",
+                                               "redteam_verdict", "redteam_score", "created_at")}
+            out[f"proposal {pid}"] = clip(json.dumps(fields, default=str) + "\nred team: " + str(row.get("redteam_json") or "")[:1500],
+                                          min(2500, budget))
+            budget -= len(out[f"proposal {pid}"])
     for key in dict.fromkeys(KB_REF.findall(result)):
         row = db.one("SELECT body FROM memory_notes WHERE agent_id IS NULL AND key = ? ORDER BY updated_at DESC LIMIT 1",
                      (key.rstrip(".,;)"),))

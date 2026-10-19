@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 from . import ledger
@@ -104,6 +105,15 @@ def system_prompt(core: Core, agent: dict, org: dict) -> str:
     return "\n\n".join(parts)
 
 
+def _note_is_stale(goal: dict) -> bool:
+    """A progress note that never mentions the current measured number (e.g. says '0 leads' when 12 are measured)."""
+    v, note = goal.get("measured_value"), goal.get("progress_note") or ""
+    if v is None or not note:
+        return False
+    shown = f"{v:g}" if isinstance(v, float) else str(v)
+    return re.search(rf"(?<![\d.]){re.escape(shown)}(?![\d])", note) is None
+
+
 def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str, Any], list[str]]:
     """Builds the wake-up message. Marks delivered messages read. Returns (text, json, msg_ids)."""
     db = core.db
@@ -149,7 +159,9 @@ def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str,
         measured = "not measured yet" if x["measured_value"] is None else f"{x['measured_value']} {x['unit']}"
         lines.append(f"- [{x['id']}] {x['title']} | metric: {x['metric']} | target {x['target']} {x['unit']} | "
                      f"measured: {measured} | due {x['due_at'][:10]} | {x['status']} | next review {x['next_review_at'][:16]}"
-                     + (f" | last note: {clip(x['progress_note'], 200)}" if x["progress_note"] else ""))
+                     + (f" | last note: {clip(x['progress_note'], 200)}" if x["progress_note"] else "")
+                     + (" | YOUR NOTE DOESN'T MATCH THE MEASURED VALUE: rewrite it from the measurement"
+                        if _note_is_stale(x) else ""))
     if not goals:
         lines.append("- (none)" + (" - set some with set_goal" if "goals" in g else ""))
     if org_level:

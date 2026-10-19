@@ -237,6 +237,8 @@ def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[s
     if force or _due(db, "expire", 30):
         out["expired"] = expire_messages(db)
     if force or _due(db, "goals", 60):
+        from .goals import drop_orphans
+        out["orphan_goals"] = drop_orphans(db, settings)
         out["goal_reviews"] = goal_reviews(db, settings)
     if force or _due(db, "stalled", 300):
         out["stalled"] = stalled_tasks(db, settings)

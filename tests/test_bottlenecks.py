@@ -159,3 +159,66 @@ async def test_tool_level_setup_stop_creates_one_clear_item(core, org, monkeypat
         assert r.outcome == "hard_stop", r.content
     items = open_items(core, "hard_stop.connect_billing")
     assert len(items) == 1 and "One-time setup for every business" in items[0]["args_json"]
+
+
+# ---------------------------------------------------------------- auditor findings (day 2)
+
+def test_second_goal_on_the_same_metric_is_refused_but_cascades_are_fine(core, org):
+    from bizops.engine import PolicyRefusal
+    from bizops.goals import set_goal
+    ceo = org["ceo"]
+    top = set_goal(core.db, core.settings, setter=ceo, owner_id=ceo["id"], title="Leads", metric="leads in CRM",
+                   target=300, metric_key="leads")
+    with pytest.raises(PolicyRefusal, match="goal.duplicate"):
+        set_goal(core.db, core.settings, setter=ceo, owner_id=ceo["id"], title="More leads", metric="leads",
+                 target=200, metric_key="leads")
+    with pytest.raises(PolicyRefusal, match="goal.duplicate"):  # same metric text, no key
+        set_goal(core.db, core.settings, setter=ceo, owner_id=ceo["id"], title="Emails", metric="Emails sent", target=1)
+        set_goal(core.db, core.settings, setter=ceo, owner_id=ceo["id"], title="Emails 2", metric="emails  sent!", target=2)
+    for role in ("coo", "cfo"):  # sub-goals that split the parent's number
+        set_goal(core.db, core.settings, setter=ceo, owner_id=org[role]["id"], title="part", metric="leads in CRM",
+                 target=100, metric_key="leads", parent_goal_id=top["id"])
+
+
+def test_dropping_a_goal_drops_its_stale_cascade(core, org):
+    from bizops.goals import drop_orphans, set_goal, update_goal
+    ceo, coo = org["ceo"], org["coo"]
+    old = set_goal(core.db, core.settings, setter=ceo, owner_id=ceo["id"], title="Win customers at $149/mo",
+                   metric="paying customers", target=3, metric_key="customers")
+    child = set_goal(core.db, core.settings, setter=ceo, owner_id=coo["id"], title="Convert at $149",
+                     metric="paying customers", target=3, metric_key="customers", parent_goal_id=old["id"])
+    update_goal(core.db, actor=ceo, goal_id=old["id"], status="dropped", progress_note="repriced to $49")
+    assert drop_orphans(core.db, core.settings) == 1
+    assert core.db.scalar("SELECT status FROM goals WHERE id = ?", (child["id"],)) == "dropped"
+    assert "parent goal was dropped" in core.db.scalar(
+        "SELECT body FROM messages WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 1", (coo["id"],))
+    set_goal(core.db, core.settings, setter=ceo, owner_id=ceo["id"], title="Win customers at $49/mo",
+             metric="paying customers", target=3, metric_key="customers")  # no duplicate left behind
+
+
+def test_stale_progress_note_is_flagged():
+    from bizops.runtime import _note_is_stale
+    assert _note_is_stale({"measured_value": 12.0, "progress_note": "0 leads so far, outreach paused"})
+    assert not _note_is_stale({"measured_value": 12.0, "progress_note": "12 leads; 9 more queued"})
+    assert not _note_is_stale({"measured_value": None, "progress_note": "0 leads"})
+
+
+def test_business_case_with_invalid_json_escapes_is_parsed():
+    from bizops.ideas import coerce_object
+    raw = '{"pricing": {"rationale": "a few extra jobs repays it\\\'s cost"}}'
+    assert "\\'" in raw
+    assert coerce_object(raw) == {"pricing": {"rationale": "a few extra jobs repays it's cost"}}
+
+
+async def test_proposal_ids_and_states_get_helpful_answers(core, org):
+    from test_ideas_chat import PROPOSAL, analyst
+    from bizops import ideas
+    p = ideas.submit_proposal(core.db, core.settings, author=analyst(core), fields=dict(PROPOSAL))
+    r = await invoke(Ctx(core=core, agent=analyst(core)), "get_proposal", {"proposal_id": p["id"][:18]})
+    assert r.ok and p["id"] in r.content
+    r = await invoke(Ctx(core=core, agent=analyst(core)), "revise_proposal",
+                     {"proposal_id": p["id"], "response": "x", "summary": "y"})
+    assert not r.ok and "'red_team'" in r.content and "wait for its verdict" in r.content
+    from bizops.decide import referenced_work
+    ev = referenced_work(core, f"Submitted {p['id']} to the red team.")
+    assert any(PROPOSAL["title"] in v for v in ev.values())

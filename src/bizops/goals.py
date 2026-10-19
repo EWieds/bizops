@@ -6,6 +6,7 @@ connector or the owner, so a goal can't be "achieved" by assertion alone (the au
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 
 from .config import Settings
@@ -48,6 +49,12 @@ def set_goal(db: Database, settings: Settings, *, setter: dict | None, owner_id:
     from .business import METRIC_KEYS
     if metric_key and metric_key not in METRIC_KEYS:
         raise PolicyRefusal("goal.metric_key", f"metric_key must be one of {', '.join(METRIC_KEYS)}")
+    dup = setter is not None and duplicate_goal(db, org_id=owner["org_id"], metric=metric, metric_key=metric_key,
+                                                parent_goal_id=parent_goal_id)
+    if dup:
+        raise PolicyRefusal("goal.duplicate", f"goal [{dup['id']}] '{dup['title']}' (owner {dup['owner_agent_id']}) already "
+                                              "tracks this metric. Update that goal, drop it first, or make yours its "
+                                              "sub-goal with parent_goal_id.")
     review_s = int(max(0.5, float(review_every_days)) * 86400)
     ts = iso()
     row = {
@@ -67,6 +74,52 @@ def set_goal(db: Database, settings: Settings, *, setter: dict | None, owner_id:
                            f"(metric: {row['metric']}, target: {row['target']} {row['unit']}, due {row['due_at'][:10]}). "
                            "Plan how you'll hit it: create tasks, and set sub-goals for your reports if you have any."))
     return row
+
+
+def _metric_id(metric: str, metric_key: str | None) -> str:
+    return metric_key or re.sub(r"[^a-z0-9]+", " ", (metric or "").lower()).strip()
+
+
+def duplicate_goal(db: Database, *, org_id: str, metric: str, metric_key: str | None,
+                   parent_goal_id: str | None) -> dict | None:
+    """An active goal in the org already tracking the same metric, unless the new goal is part of its cascade
+    (a sub-goal under a goal with that metric). Two independent goals for one number is how targets drift."""
+    want = _metric_id(metric, metric_key)
+    if not want:
+        return None
+    seen, pid = set(), parent_goal_id
+    while pid and pid not in seen:  # a cascade under a goal with this metric is fine
+        seen.add(pid)
+        p = db.one("SELECT parent_goal_id, metric, metric_key FROM goals WHERE id = ?", (pid,))
+        if not p:
+            break
+        if _metric_id(p["metric"], p["metric_key"]) == want:
+            return None
+        pid = p["parent_goal_id"]
+    for g in db.all("SELECT * FROM goals WHERE org_id = ? AND status IN ('active','at_risk')", (org_id,)):
+        if _metric_id(g["metric"], g["metric_key"]) == want:
+            return g
+    return None
+
+
+def drop_orphans(db: Database, settings: Settings) -> int:
+    """Active goals whose parent was dropped are stale cascades (old targets, old prices): drop them and tell
+    their owners to re-plan under the current goals."""
+    n = 0
+    for g in db.all("SELECT c.*, p.title AS parent_title FROM goals c JOIN goals p ON p.id = c.parent_goal_id "
+                    "WHERE c.status IN ('active','at_risk') AND p.status = 'dropped'"):
+        db.execute("UPDATE goals SET status = 'dropped', progress_note = ?, updated_at = ? WHERE id = ?",
+                   (f"Dropped automatically: its parent goal '{g['parent_title']}' was dropped. {g['progress_note'] or ''}"[:1000],
+                    iso(), g["id"]))
+        owner = get_agent(db, g["owner_agent_id"])
+        if owner and owner["status"] == "active":
+            post_message(db, settings, org_id=g["org_id"], sender_kind="system", sender_id=None, recipient_kind="agent",
+                         recipient_id=owner["id"], type="instruction",
+                         body=(f"Your goal [{g['id']}] '{g['title']}' was dropped because its parent goal was dropped. "
+                               "Check your manager's current goals (list_goals scope=org) and work toward those; ask "
+                               "your manager if you need a new sub-goal."))
+        n += 1
+    return n
 
 
 def update_goal(db: Database, *, actor: dict | None, goal_id: str, status: str | None = None,

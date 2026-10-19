@@ -67,6 +67,11 @@ def _normalize_args(ctx: Ctx, name: str, args: dict) -> None:
     for k in AGENT_REF_ARGS.get(name, ()):
         if isinstance(args.get(k), str):
             args[k] = resolve_agent_ref(ctx.db, ctx.agent, args[k])
+    pid = args.get("proposal_id")
+    if isinstance(pid, str) and len(pid) >= 12 and not ctx.db.one("SELECT 1 AS x FROM proposals WHERE id = ?", (pid,)):
+        rows = ctx.db.all("SELECT id FROM proposals WHERE id LIKE ? LIMIT 2", (pid.strip() + "%",))
+        if len(rows) == 1:  # a truncated id
+            args["proposal_id"] = rows[0]["id"]
 
 
 def record_decision(ctx: Ctx, *, call_id: str, action: str, args: dict, verdict: str, rule: str,

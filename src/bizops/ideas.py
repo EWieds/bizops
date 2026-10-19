@@ -157,14 +157,26 @@ def _items(v: Any, name: str, n: int) -> list[dict]:
     return [x for x in v if isinstance(x, dict)]
 
 
+def coerce_object(value: Any) -> Any:
+    """Models sometimes send an object as a JSON string, often with invalid escapes like \\' in it."""
+    if not isinstance(value, str):
+        return value
+    for attempt in (value, value.replace("\\'", "'")):
+        try:
+            return json.loads(attempt)
+        except ValueError:
+            continue
+    try:
+        import ast
+        return ast.literal_eval(value)
+    except (ValueError, SyntaxError):
+        return value
+
+
 def validate_case(case: Any, *, starting_budget_usd: float) -> tuple[dict, list[str]]:
     """Check a business case is complete and internally consistent. Returns (clean case, sanity flags).
     Arithmetic is recomputed here, never trusted; the flags are where the red team starts digging."""
-    if isinstance(case, str):  # models sometimes send the object as a JSON string
-        try:
-            case = json.loads(case)
-        except ValueError:
-            pass
+    case = coerce_object(case)
     if not isinstance(case, dict):
         raise PolicyRefusal("proposal.case", "a proposal needs a business_case (see the tool schema)")
     pr = case.get("pricing") or {}
@@ -303,8 +315,15 @@ def revise_proposal(db: Database, settings: Settings, *, author: dict | None, pr
                     fields: dict[str, Any], response: str) -> dict:
     """The author answers a 'fix' verdict: update the proposal and send it back for another round."""
     p = db.one("SELECT * FROM proposals WHERE id = ?", (proposal_id,))
-    if not p or p["status"] != "revising":
-        raise PolicyRefusal("proposal.state", "only a proposal the red team sent back can be revised")
+    if not p:
+        raise PolicyRefusal("proposal.missing", f"no proposal {proposal_id}; list_proposals shows the ids")
+    if p["status"] != "revising":
+        nxt = {"red_team": "it's waiting for the red team; wait for its verdict",
+               "new": "it passed review and awaits a launch decision; nothing to revise",
+               "parked": "it was parked; submit a NEW proposal (submit_proposal) if you have a materially better version",
+               "launched": "it's already launched"}.get(p["status"], "submit a new proposal instead")
+        raise PolicyRefusal("proposal.state", f"{proposal_id} is '{p['status']}', not 'revising': {nxt}. Only a "
+                                              "proposal the red team sent back ('fix' verdict) can be revised.")
     max_rounds = int(settings.policy.get("venture", {}).get("red_team_max_rounds", 3))
     if p["review_round"] >= max_rounds:
         raise PolicyRefusal("proposal.rounds", f"{max_rounds} review rounds used; it stays parked")
