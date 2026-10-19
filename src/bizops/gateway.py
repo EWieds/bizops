@@ -192,10 +192,14 @@ async def invoke(ctx: Ctx, name: str, args: dict | None, *, reason: str | None =
         raw = await asyncio.wait_for(tool.handler(ctx, args), timeout=tool.timeout_s)
     except PolicyRefusal as e:
         if e.rule.startswith("hard_stop"):
-            existing = db.one("SELECT id FROM policy_decisions WHERE verdict = 'hard_stop' AND status = 'open' AND rule = ?",
-                              (e.rule,))
-            did = existing["id"] if existing else record_decision(ctx, call_id=call_id, action=name, args=args,
-                                                                  verdict=HARD_STOP, rule=e.rule, status="open")
+            topic = e.rule.removeprefix("hard_stop.connect_")
+            if topic in owner_setup.TOPICS:  # one clearly worded setup item for every business
+                did = owner_setup.setup_item(db, topic)
+            else:
+                existing = db.one("SELECT id FROM policy_decisions WHERE verdict = 'hard_stop' AND status = 'open' "
+                                  "AND rule = ?", (e.rule,))
+                did = existing["id"] if existing else record_decision(ctx, call_id=call_id, action=name, args=args,
+                                                                      verdict=HARD_STOP, rule=e.rule, status="open")
             log_event(db, kind="decision", action=name, phase="after", result={"rule": e.rule, "decision_id": did},
                       outcome="hard_stop", ref_type="decision", ref_id=did, **base)
             return ToolResult(False, f"QUEUED FOR THE OWNER ({e.rule}): {e.detail} (decision {did}). Continue with other work.",

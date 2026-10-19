@@ -148,3 +148,14 @@ def test_agents_see_setup_status(core, org):
     from bizops.runtime import gather_context
     text, _, _ = gather_context(core, org["ceo"], "heartbeat")
     assert "Platform setup" in text and "Never file it" in text
+
+
+async def test_tool_level_setup_stop_creates_one_clear_item(core, org, monkeypatch):
+    from bizops.tools import sales
+    monkeypatch.setattr(sales, "sandbox_world", lambda ctx: False)
+    for _ in range(2):
+        r = await invoke(Ctx(core=core, agent=org["ceo"]), "create_offer",
+                         {"name": "Plan", "description": "Monthly plan for dentists", "price_usd": 49, "interval": "month"})
+        assert r.outcome == "hard_stop", r.content
+    items = open_items(core, "hard_stop.connect_billing")
+    assert len(items) == 1 and "One-time setup for every business" in items[0]["args_json"]
