@@ -200,8 +200,9 @@ def record_inbound(db: Database, *, org_id: str | None, from_addr: str, to_addr:
     org_id = org_id or (lead["org_id"] if lead else None)
     account_mail = False
     if not org_id:
-        # Not a lead: mail to a business's signup address (mailbox+<slug>@domain) is account mail
-        # (verification codes, receipts), kept for read_account_mail and never triaged as a sales reply.
+        # Not a lead: mail to a business's own address (mailbox+<slug>@domain). Automated mail (verification
+        # codes, receipts) is kept for read_account_mail only; mail from a person (an inquiry from the website)
+        # also goes through reply triage, which wakes the business's CEO.
         org = _org_for_signup_address(db, to_addr)
         if not org:
             return None
@@ -214,8 +215,13 @@ def record_inbound(db: Database, *, org_id: str | None, from_addr: str, to_addr:
                                 "direction": "in", "from_addr": from_addr, "to_addr": to_addr, "subject": subject,
                                 "body": body, "status": "account_mail" if account_mail else "received",
                                 "provider": provider, "provider_id": provider_id, "error": None,
-                                "processed": int(account_mail), "sim_due_at": None, "created_at": iso()})
+                                "processed": int(account_mail and bool(AUTOMATED_MAIL.search(f"{from_addr} {subject}"))),
+                                "sim_due_at": None, "created_at": iso()})
     return eid
+
+
+AUTOMATED_MAIL = re.compile(r"no-?reply|do-?not-?reply|notifications?@|mailer-daemon|postmaster|verif|confirm|"
+                            r"security@|accounts?@|billing@|receipt|invoice|welcome to|your code|one-time", re.I)
 
 
 def _org_for_signup_address(db: Database, to_addr: str) -> dict | None:

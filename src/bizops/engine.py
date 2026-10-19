@@ -306,7 +306,8 @@ def team(db: Database, agent: dict) -> dict[str, Any]:
 # ---------------------------------------------------------------- messages
 
 def check_message_route(db: Database, sender: dict, recipient: dict) -> None:
-    """Peers may only message within their org; across orgs only along a supervisor edge."""
+    """Peers may only message within their org; across orgs along a supervisor edge, or between a business's
+    CEO and the platform's executives (e.g. the CIO red-teaming an offer)."""
     if recipient["status"] == "retired":
         raise PolicyRefusal("message.recipient", "recipient is retired")
     if recipient["id"] == sender["id"]:
@@ -315,7 +316,71 @@ def check_message_route(db: Database, sender: dict, recipient: dict) -> None:
         return
     if recipient["id"] == sender["parent_agent_id"] or recipient["parent_agent_id"] == sender["id"]:
         return
-    raise PolicyRefusal("message.scope", "agents may only message within their org or their direct supervisor/reports")
+    root = root_org(db)
+    if root and {sender["org_id"], recipient["org_id"]} & {root["id"]}:
+        other = recipient if sender["org_id"] == root["id"] else sender
+        if other["depth"] == 0:
+            return
+    raise PolicyRefusal("message.scope", "agents may only message within their org, their direct supervisor/reports, "
+                                         "or (business CEOs) the platform's executives")
+
+
+def readable_orgs(db: Database, agent: dict) -> list[str] | None:
+    """Orgs whose files and knowledge base an agent may read: its own and the platform's; every org for
+    agents with platform oversight (None = all). Writing always stays in the agent's own org."""
+    if "platform_read" in grants(agent):
+        return None
+    root = root_org(db)
+    return [agent["org_id"]] + ([root["id"]] if root and root["id"] != agent["org_id"] else [])
+
+
+def org_filter(db: Database, agent: dict, column: str = "org_id") -> tuple[str, tuple]:
+    orgs = readable_orgs(db, agent)
+    if orgs is None:
+        return "1 = 1", ()
+    return f"{column} IN ({','.join('?' * len(orgs))})", tuple(orgs)
+
+
+AGENT_ALIASES = {"platform_ceo": ("root", "platform_ceo"), "platform ceo": ("root", "platform_ceo"),
+                 "cio": ("root", "platform_cfo"), "chief investment officer": ("root", "platform_cfo"),
+                 "platform_cfo": ("root", "platform_cfo"), "platform_coo": ("root", "platform_coo"),
+                 "auditor": ("root", "auditor"), "red_team": ("root", "red_team"), "red team": ("root", "red_team"),
+                 "venture_analyst": ("root", "venture_analyst")}
+
+
+def resolve_agent_ref(db: Database, sender: dict, ref: str) -> str:
+    """Agents often name a colleague by role or name ('ceo', 'Head of Growth') instead of the agent id.
+    Resolve that to the id (own org first, then the platform's executives); refuse only if ambiguous."""
+    ref = str(ref or "").strip()
+    if not ref or db.one("SELECT 1 AS x FROM agents WHERE id = ?", (ref,)):
+        return ref
+    key = ref.lower().strip().strip("@").replace("-", "_")
+    if key in ("supervisor", "boss", "manager", "my supervisor", "parent") and sender.get("parent_agent_id"):
+        return sender["parent_agent_id"]
+    if key in ("me", "self", "myself"):
+        return sender["id"]
+    live = "status != 'retired'"
+    if key in AGENT_ALIASES or key.replace(" ", "_") in AGENT_ALIASES:
+        _, role = AGENT_ALIASES.get(key) or AGENT_ALIASES[key.replace(" ", "_")]
+        root = root_org(db)
+        row = db.one(f"SELECT id FROM agents WHERE org_id = ? AND role = ? AND {live} ORDER BY created_at LIMIT 1",
+                     (root["id"] if root else "", role))
+        if row:
+            return row["id"]
+    for org_id in (sender["org_id"], (root_org(db) or {}).get("id")):
+        if not org_id:
+            continue
+        rows = db.all(f"SELECT id, role, name FROM agents WHERE org_id = ? AND {live} AND "
+                      "(lower(role) = ? OR lower(name) = ? OR lower(title) = ?) ORDER BY depth, created_at",
+                      (org_id, key.replace(" ", "_"), ref.lower(), ref.lower()))
+        if key == "ceo" and not rows:
+            rows = db.all(f"SELECT id, role, name FROM agents WHERE org_id = ? AND depth = 0 AND {live}", (org_id,))
+        if len(rows) == 1:
+            return rows[0]["id"]
+        if len(rows) > 1:
+            raise PolicyRefusal("agent.ambiguous", f"{ref!r} matches several agents: "
+                                + ", ".join(f"{r['name']} ({r['id']})" for r in rows) + "; use the id")
+    raise PolicyRefusal("message.recipient", f"no agent {ref!r}; use an agent id from list_team")
 
 
 def post_message(db: Database, settings: Settings, *, org_id: str, sender_kind: str, sender_id: str | None,

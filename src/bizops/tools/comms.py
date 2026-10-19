@@ -72,6 +72,8 @@ async def create_task_tool(ctx: Ctx, args: dict) -> ToolOutput:
                   "blocked_reason": {"type": "string"}},
       required=["task_id", "status"])
 async def update_task_tool(ctx: Ctx, args: dict) -> ToolOutput:
+    if not args.get("task_id"):
+        raise PolicyRefusal("task.missing", "give the task_id of one of your tasks (list_tasks shows them)")
     if args["status"] == "done" and args.get("result"):
         task = ctx.db.one("SELECT deliverable, org_id FROM tasks WHERE id = ?", (args["task_id"],))
         if task:
@@ -106,6 +108,9 @@ HARD_STOP_CATEGORIES = ["legal_commitment", "identity_account", "consumer_voice_
                   "out), or a website step only a person can do after you really tried (browser_assist: CAPTCHA, "
                   "a code texted to the owner's phone, ID check; say the site, the page and exactly what's needed). "
                   "It goes to the owner's queue; the task is marked blocked; keep working on other things. "
+                  "Never file platform setup (Stripe, the mailbox): it's one item the owner already has, tracked by "
+                  "the system. Never ask for API keys you can work around: audit_website scans sites (accessibility, "
+                  "speed) with the built-in browser; signups go through the browser and request_purchase. "
                   "The owner's answer (e.g. a code) comes back to you as a message; your browser tab stays open.",
       properties={"category": {"type": "string", "enum": HARD_STOP_CATEGORIES},
                   "summary": {"type": "string", "description": "exactly what you need the owner to do"},

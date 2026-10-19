@@ -169,6 +169,34 @@ def audit_checks(db: Database, settings: Settings) -> int:
                           dedupe=f"stalled:{a['id']}:{day_start()[:10]}",
                           summary=f"{a['name']} ran {a['runs']} times in 5 days and finished no tasks.",
                           evidence="runs vs done tasks, last 5 days", recommendation="Review the role; restructure or retire.")
+    n += bottleneck_checks(db, settings)
+    return n
+
+
+# Refusals that are the system working as intended, not a bottleneck to engineer away.
+EXPECTED_RULES = ("kill_switch", "rate_limit.", "budget.", "platform.", "org.", "agent.budget", "sales.", "pay.")
+
+
+def bottleneck_checks(db: Database, settings: Settings) -> int:
+    """The same refusal (or owner-queue item) hitting agents again and again means a missing tool, grant or
+    route, not a lazy agent. Each one becomes an audit finding with examples, so it gets fixed in code."""
+    since = iso(now() - timedelta(hours=24))
+    limit = int(_cfg(settings).get("bottleneck_repeats", 5))
+    n = 0
+    for r in db.all("SELECT rule, verdict, COUNT(*) AS c, COUNT(DISTINCT agent_id) AS agents FROM policy_decisions "
+                    "WHERE ts >= ? AND verdict IN ('blocked','hard_stop') GROUP BY rule, verdict HAVING COUNT(*) >= ?",
+                    (since, limit)):
+        if r["rule"].startswith(EXPECTED_RULES) or r["rule"].startswith("approver."):
+            continue
+        ex = db.all("SELECT d.action, a.role, substr(d.args_json, 1, 200) AS args FROM policy_decisions d "
+                    "LEFT JOIN agents a ON a.id = d.agent_id WHERE d.rule = ? AND d.ts >= ? ORDER BY d.ts DESC LIMIT 4",
+                    (r["rule"], since))
+        n += _finding(db, kind="other", severity="medium", dedupe=f"bottleneck:{r['rule']}:{day_start()[:10]}",
+                      summary=f"Recurring bottleneck: '{r['rule']}' {r['verdict']} {r['c']} times in 24h "
+                              f"({r['agents']} agents).",
+                      evidence="\n".join(f"{e['role']} {e['action']}: {e['args']}" for e in ex),
+                      recommendation="Fix the cause in code (a missing tool, grant, route or clearer refusal), not "
+                                     "the agents' prompts.")
     return n
 
 
@@ -267,11 +295,13 @@ def heartbeat_needed(db: Database, settings: Settings, agent: dict) -> tuple[boo
 
 async def poll_connectors(core) -> dict[str, int]:
     """Pull new replies from the mailbox and new payments from the billing provider; renew monthly
-    purchases (debit the wallet or pause the card); close browser tabs nobody is using."""
-    from . import business, purchases
+    purchases (debit the wallet or pause the card); close browser tabs nobody is using; close setup items
+    whose connection now works."""
+    from . import business, owner_setup, purchases
     out: dict[str, int] = {}
     for name, fn in (("emails_in", business.poll_email), ("payments_in", business.poll_billing),
-                     ("renewals", purchases.renew_due), ("tabs_closed", lambda c: c.browser.close_idle())):
+                     ("renewals", purchases.renew_due), ("tabs_closed", lambda c: c.browser.close_idle()),
+                     ("setup_connected", owner_setup.resolve_connected)):
         try:
             out[name] = await fn(core)
         except Exception as e:

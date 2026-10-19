@@ -7,7 +7,7 @@ import mimetypes
 import re
 
 from ..db import insert
-from ..engine import PolicyRefusal
+from ..engine import PolicyRefusal, org_filter
 from ..util import iso, new_id
 from . import Ctx, ToolOutput, tool
 
@@ -43,12 +43,15 @@ async def write_artifact(ctx: Ctx, args: dict) -> ToolOutput:
 
 
 @tool("list_artifacts", grant="files", action_class="internal",
-      description="List files produced in your org (newest first), optionally filtered by name or task.",
-      properties={"name_contains": {"type": "string"}, "task_id": {"type": "string"}})
+      description="List files produced in your org (newest first), optionally filtered by name or task. "
+                  "org_id lists another org's files you can read (the platform's; any, for platform executives).",
+      properties={"name_contains": {"type": "string"}, "task_id": {"type": "string"}, "org_id": {"type": "string"}})
 async def list_artifacts(ctx: Ctx, args: dict) -> list:
+    org_id = args.get("org_id") or ctx.agent["org_id"]
+    where, wparams = org_filter(ctx.db, ctx.agent, "ar.org_id")
     sql = ("SELECT ar.id, ar.name, ar.task_id, ar.size_bytes, ar.created_at, a.name AS author FROM artifacts ar "
-           "LEFT JOIN agents a ON a.id = ar.agent_id WHERE ar.org_id = ?")
-    params: list = [ctx.agent["org_id"]]
+           f"LEFT JOIN agents a ON a.id = ar.agent_id WHERE ar.org_id = ? AND {where}")
+    params: list = [org_id, *wparams]
     if args.get("name_contains"):
         sql += " AND ar.name LIKE ?"
         params.append(f"%{args['name_contains']}%")
@@ -59,17 +62,22 @@ async def list_artifacts(ctx: Ctx, args: dict) -> list:
 
 
 @tool("read_artifact", grant="files", action_class="internal",
-      description="Read a file produced in your org, by artifact id or by file name (latest version).",
+      description="Read a file by artifact id or file name (latest version): your org's files, the platform's, "
+                  "and (platform executives) any business's.",
       properties={"artifact_id": {"type": "string", "description": "art_... id, or a file name like plan.md"}},
       required=["artifact_id"])
 async def read_artifact(ctx: Ctx, args: dict) -> str:
     key = args["artifact_id"].strip()
-    row = ctx.db.one("SELECT * FROM artifacts WHERE id = ? AND org_id = ?", (key, ctx.agent["org_id"]))
+    where, params = org_filter(ctx.db, ctx.agent)
+    row = ctx.db.one(f"SELECT * FROM artifacts WHERE id = ? AND {where}", (key, *params))
     if not row:
         safe = re.sub(r"[^A-Za-z0-9._-]+", "_", key).strip("._")
-        row = ctx.db.one("SELECT * FROM artifacts WHERE org_id = ? AND (name = ? OR name = ?) ORDER BY created_at DESC LIMIT 1",
-                         (ctx.agent["org_id"], key, safe))
+        row = ctx.db.one(f"SELECT * FROM artifacts WHERE (name = ? OR name = ?) AND {where} "
+                         "ORDER BY org_id != ?, created_at DESC LIMIT 1", (key, safe, *params, ctx.agent["org_id"]))
     if not row:
-        raise PolicyRefusal("files.missing", "no such file in your org; use list_artifacts")
+        raise PolicyRefusal("files.missing", "no such file you can read; use list_artifacts")
     text = (ctx.settings.artifacts_dir / row["path"]).read_text(errors="replace")
+    if row["org_id"] != ctx.agent["org_id"]:
+        org = ctx.db.one("SELECT name FROM orgs WHERE id = ?", (row["org_id"],))
+        text = f"(file of {org['name'] if org else row['org_id']})\n{text}"
     return text[:20000]

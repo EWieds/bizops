@@ -62,6 +62,9 @@ def make_llm(settings: Settings, backend: str | None = None) -> LLMClient:
 GRANT_UPGRADES = [
     ("0005", "approve_purchases", ("platform_cfo",)),
     ("0005", "browser", ("ceo", "marketer", "coder", "designer", "product_engineer", "customer_success")),
+    ("0007", "files", ("platform_cfo", "platform_coo")),
+    ("0007", "ideas", ("platform_cfo",)),
+    ("0007", "crm", ("researcher",)),
 ]
 
 

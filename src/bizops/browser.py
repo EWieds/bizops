@@ -10,12 +10,16 @@
 * Secrets: tools resolve {{card:...}} and {{login:...}} placeholders right before typing; the values
   are redacted from everything returned, so the model never sees a card number or a password.
 * Everything a page says is untrusted data, wrapped like web fetches.
+* audit(): an accessibility (axe-core, WCAG 2.x rules) and speed scan of any public page, so no
+  scanner API key is ever needed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -64,6 +68,36 @@ SNAPSHOT_JS = r"""
     items.push(d);
   }
   return {title: document.title, text: clean(document.body ? document.body.innerText : '').slice(0, 8000), items};
+}
+"""
+
+
+AXE_VERSION = "4.10.2"
+AXE_CDN = f"https://cdn.jsdelivr.net/npm/axe-core@{AXE_VERSION}/axe.min.js"
+
+PERF_JS = r"""
+async () => {
+  const nav = performance.getEntriesByType('navigation')[0] || {};
+  const res = performance.getEntriesByType('resource');
+  const lcp = await new Promise(resolve => {
+    let last = null;
+    try {
+      new PerformanceObserver(l => { const e = l.getEntries(); if (e.length) last = e[e.length - 1].startTime; })
+        .observe({type: 'largest-contentful-paint', buffered: true});
+    } catch (e) {}
+    setTimeout(() => resolve(last), 300);
+  });
+  const bytes = res.reduce((s, r) => s + (r.transferSize || 0), nav.transferSize || 0);
+  const imgs = Array.from(document.images);
+  return {
+    ttfb_ms: Math.round(nav.responseStart || 0), dom_content_loaded_ms: Math.round(nav.domContentLoadedEventEnd || 0),
+    load_ms: Math.round(nav.loadEventEnd || 0), lcp_ms: lcp === null ? null : Math.round(lcp),
+    requests: res.length + 1, transfer_kb: Math.round(bytes / 1024),
+    images: imgs.length, images_without_alt: imgs.filter(i => !i.hasAttribute('alt')).length,
+    html_lang: document.documentElement.getAttribute('lang') || null,
+    has_viewport_meta: !!document.querySelector('meta[name=viewport]'),
+    title: document.title
+  };
 }
 """
 
@@ -255,6 +289,65 @@ class Browser:
             return "No page open. Use browser_open first."
         await page.keyboard.press(key)
         return await self.snapshot(agent)
+
+    async def _axe_source(self) -> str:
+        if getattr(self, "_axe", None):
+            return self._axe
+        candidates = [os.environ.get("BIZOPS_AXE_JS") or ""]
+        npm = shutil.which("npm")
+        if npm:
+            try:
+                root = subprocess.run([npm, "root", "-g"], capture_output=True, text=True, timeout=20).stdout.strip()
+                candidates.append(os.path.join(root, "axe-core", "axe.min.js"))
+            except Exception:
+                pass
+        cache = Path(self.settings.data_dir) / "cache" / f"axe-{AXE_VERSION}.min.js"
+        candidates.append(str(cache))
+        for c in candidates:
+            if c and os.path.isfile(c):
+                self._axe = Path(c).read_text()
+                return self._axe
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(AXE_CDN)
+            r.raise_for_status()
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(r.text)
+        self._axe = r.text
+        return self._axe
+
+    async def audit(self, agent: dict, url: str, *, mobile: bool = False) -> dict[str, Any]:
+        """Accessibility (axe-core) + speed scan of one page, in a fresh tab of the business's browser."""
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        if not self.cfg.get("allow_private_hosts", False):
+            await check_url(url, list(self.settings.policy.get("web", {}).get("blocked_domains", [])))
+        ctx = await self._context(agent["org_id"])
+        page = await ctx.new_page()
+        try:
+            if mobile:
+                await page.set_viewport_size({"width": 390, "height": 844})
+            resp = await page.goto(url, wait_until="load", timeout=45_000)
+            await self._settle(page)
+            perf = await page.evaluate(PERF_JS)
+            await page.evaluate(await self._axe_source())
+            axe = await page.evaluate("""async () => {
+              const r = await axe.run(document, {runOnly: {type: 'tag', values: ['wcag2a','wcag2aa','wcag21a','wcag21aa','wcag22aa','best-practice']},
+                                                resultTypes: ['violations','incomplete']});
+              const pick = v => ({id: v.id, impact: v.impact, help: v.help, help_url: v.helpUrl,
+                                  wcag: v.tags.filter(t => /^wcag\\d/.test(t)), count: v.nodes.length,
+                                  examples: v.nodes.slice(0, 3).map(n => ({target: n.target.join(' '), html: n.html.slice(0, 160)}))});
+              return {violations: r.violations.map(pick), needs_review: r.incomplete.map(pick).slice(0, 15),
+                      passes: r.passes.length, engine: 'axe-core ' + r.testEngine.version};
+            }""")
+        finally:
+            await page.close()
+        order = {"critical": 0, "serious": 1, "moderate": 2, "minor": 3}
+        axe["violations"].sort(key=lambda v: (order.get(v["impact"] or "minor", 4), -v["count"]))
+        return {"url": url, "status": resp.status if resp else None, "viewport": "mobile 390x844" if mobile else "desktop 1280x900",
+                "accessibility": {**axe, "violation_count": len(axe["violations"]),
+                                  "by_impact": {k: sum(1 for v in axe["violations"] if v["impact"] == k) for k in order}},
+                "performance": perf}
 
     async def close_idle(self, max_idle_s: float = 1800) -> int:
         """Close tabs nobody used for a while (their logins stay in the profile)."""

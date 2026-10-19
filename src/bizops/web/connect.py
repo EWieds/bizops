@@ -111,4 +111,6 @@ def register_connect(app: FastAPI, core, page) -> None:
         if group == "site" and merged.get("PUBLIC_BASE_URL"):
             set_setting(core.db, "public_base_url", merged["PUBLIC_BASE_URL"].rstrip("/"))
         core.reload_connectors()
+        from ..owner_setup import resolve_connected
+        await resolve_connected(core)
         return RedirectResponse(f"/connect?msg={result}", status_code=303)

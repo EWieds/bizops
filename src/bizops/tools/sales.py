@@ -280,6 +280,23 @@ async def publish_page(ctx: Ctx, args: dict) -> ToolOutput:
     return ToolOutput({"url": url, **r}, ref_type="site", ref_id=r["site_id"])
 
 
+@tool("read_page", grant="site", action_class="internal",
+      description="Read back a page your business published (its HTML, title and URL), e.g. to edit it without "
+                  "losing anything. Without a path, lists your published pages.",
+      properties={"path": {"type": "string"}})
+async def read_page(ctx: Ctx, args: dict) -> dict | list:
+    org = ctx.agent["org_id"]
+    if not args.get("path"):
+        rows = ctx.db.all("SELECT path, title, updated_at FROM sites WHERE org_id = ? ORDER BY path", (org,))
+        return [{**r, "url": business.page_url(ctx.db, ctx.settings, org, r["path"])} for r in rows]
+    path = str(args["path"]).strip().strip("/") or "index"
+    row = ctx.db.one("SELECT * FROM sites WHERE org_id = ? AND path = ?", (org, path))
+    if not row:
+        raise PolicyRefusal("site.missing", f"no published page {path!r}; call read_page without a path to list them")
+    return {"path": row["path"], "title": row["title"], "url": business.page_url(ctx.db, ctx.settings, org, row["path"]),
+            "updated_at": row["updated_at"], "html": row["html"]}
+
+
 @tool("share_file", grant="site", action_class="publish",
       description="Get a public link to a file your org produced (e.g. a deliverable for a customer).",
       properties={"artifact_id": {"type": "string"}}, required=["artifact_id"])

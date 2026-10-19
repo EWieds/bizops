@@ -160,6 +160,11 @@ def _items(v: Any, name: str, n: int) -> list[dict]:
 def validate_case(case: Any, *, starting_budget_usd: float) -> tuple[dict, list[str]]:
     """Check a business case is complete and internally consistent. Returns (clean case, sanity flags).
     Arithmetic is recomputed here, never trusted; the flags are where the red team starts digging."""
+    if isinstance(case, str):  # models sometimes send the object as a JSON string
+        try:
+            case = json.loads(case)
+        except ValueError:
+            pass
     if not isinstance(case, dict):
         raise PolicyRefusal("proposal.case", "a proposal needs a business_case (see the tool schema)")
     pr = case.get("pricing") or {}

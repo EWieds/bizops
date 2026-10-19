@@ -28,7 +28,7 @@ async def set_goal_tool(ctx: Ctx, args: dict) -> ToolOutput:
                       ref_type="goal", ref_id=g["id"])
 
 
-@tool("update_goal", grant="goals", action_class="internal", ref_type="goal",
+@tool("update_goal", grant="core", action_class="internal", ref_type="goal",
       description="Review a goal: set its status and a short progress note (what moved, evidence, next step). "
                   "You can't write the measured value; that comes from connectors or the owner.",
       properties={"goal_id": {"type": "string"},

@@ -102,3 +102,17 @@ async def test_card_placeholder_needs_approved_purchase(browser_core, org, site)
     await invoke(ceo, "browser_open", {"url": site})
     r = await invoke(ceo, "browser_type", {"ref": "f1e0", "text": "{{card:pur_fake:number}}"})
     assert not r.ok and "purchase.unknown" in r.content
+
+
+async def test_audit_website_finds_accessibility_problems(browser_core, org, site, tmp_path, monkeypatch):
+    core = browser_core
+    core.settings.policy["browser"]["allow_private_hosts"] = True
+    local_axe = "/tmp/claude-0/-home-user-bizops/e0b20a27-3c2a-5021-86a4-b7492772e377/scratchpad/axe/node_modules/axe-core/axe.min.js"
+    if os.path.exists(local_axe):
+        monkeypatch.setenv("BIZOPS_AXE_JS", local_axe)
+    r = await invoke(Ctx(core=core, agent=org["ceo"]), "audit_website", {"url": site})
+    assert r.ok, r.content
+    report = r.content
+    assert '"violation_count"' in report and "axe-core" in report
+    assert "label" in report  # the signup form's password field and select have no proper labels
+    assert '"ttfb_ms"' in report and '"html_lang": null' in report

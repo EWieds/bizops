@@ -179,6 +179,8 @@ def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str,
     if agent["role"] in ("venture_analyst", "red_team", "platform_ceo"):
         from .ideas import get_params, params_text
         lines.append("\n## The owner's research parameters (for new business ideas)\n" + params_text(get_params(db)))
+    from .owner_setup import status_lines
+    lines.append("\n## Platform setup (the owner's side; never file it)\n" + "\n".join(status_lines(core, agent["org_id"])))
     lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} of {fmt_usd(agent['budget_micros'])} this month")
     if "money" in g:
         lines.append(f"- org wallet: {fmt_usd(ledger.wallet_balance(db, agent['org_id']))}")

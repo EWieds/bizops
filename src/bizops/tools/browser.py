@@ -8,7 +8,7 @@ import string
 
 from .. import purchases
 from ..db import insert
-from ..engine import PolicyRefusal, get_org
+from ..engine import PolicyRefusal
 from ..util import iso, new_id
 from ..webclient import wrap_untrusted
 from . import Ctx, ToolOutput, tool
@@ -98,6 +98,19 @@ async def browser_press(ctx: Ctx, args: dict) -> str:
     return await ctx.core.browser.press(ctx.agent, str(args["key"]))
 
 
+@tool("audit_website", grant="web", action_class="web_read", timeout_s=120,
+      description="Scan a public web page in a real browser: accessibility against WCAG 2.0/2.1/2.2 A/AA rules "
+                  "(axe-core: violations by impact with the failing elements and the WCAG criteria) and speed "
+                  "(time to first byte, largest contentful paint, load time, page weight, requests). No API key "
+                  "needed. Use it for prospects' sites, customer deliverables and your own pages. mobile=true scans "
+                  "at phone size.",
+      properties={"url": {"type": "string"}, "mobile": {"type": "boolean"}}, required=["url"])
+async def audit_website(ctx: Ctx, args: dict) -> str:
+    import json
+    report = await ctx.core.browser.audit(ctx.agent, str(args["url"]), mobile=bool(args.get("mobile")))
+    return wrap_untrusted(report["url"], json.dumps(report, ensure_ascii=False)[:30000])
+
+
 @tool("save_login", grant="browser", action_class="internal",
       description="Save a website login for your business before signing up. Leave password empty to generate a "
                   "strong one (you never see it). Then type {{login:<name>:username}} / {{login:<name>:password}}.",
@@ -132,12 +145,8 @@ async def list_logins(ctx: Ctx, args: dict) -> list:
 
 
 def signup_address(ctx: Ctx) -> str | None:
-    base = ctx.settings.secret("EMAIL_FROM") or ctx.settings.secret("SMTP_USER") or ""
-    if "@" not in base or not ctx.core.connectors.email.live:
-        return None
-    local, domain = base.rsplit("@", 1)
-    org = get_org(ctx.db, ctx.agent["org_id"])
-    return f"{local.split('+')[0]}+{org['slug']}@{domain}"
+    from ..owner_setup import business_address
+    return business_address(ctx.core, ctx.agent["org_id"])
 
 
 @tool("signup_email", grant="browser", action_class="internal",

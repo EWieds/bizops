@@ -189,7 +189,14 @@ cost written to the ledger after.
   is stored as account mail (`read_account_mail`) for verification codes. Steps only a person can do
   (CAPTCHA, a code to the owner's phone, ID checks) go to the owner's queue as `browser_assist`; the
   owner's note (e.g. the code) comes back to the agent, whose tab is still open.
-- Messages: peers only within an org (plus direct supervisor/report edges), hop limit, TTL.
+- Owner setup is one item (`owner_setup.py`): any hard stop about a platform connection (Stripe, the
+  mailbox) folds into a single queue item for all businesses and never blocks a task; identical asks are
+  never filed twice; when the connection works the item closes itself and every waiting agent is told.
+  Agents see what's connected (and their business's email address) in every wake-up context.
+- Bottleneck guard (`maintenance.bottleneck_checks`): any refusal rule that blocks agents 5+ times in 24h
+  becomes an audit finding with examples, so the cause is fixed in code (tool, grant, route), not prompts.
+- Messages: agents may name recipients by role or name ('ceo', 'cio'); the gateway resolves it. Business
+  CEOs and the platform's executives may message each other directly. Otherwise peers only within an org (plus direct supervisor/report edges), hop limit, TTL.
 - Revenue/metrics are written only by connectors or the owner (ledger source rules).
 - Kill switches: platform, org, agent. Dashboard buttons + `bizops pause`.
 
