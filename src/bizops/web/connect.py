@@ -134,6 +134,9 @@ def register_connect(app: FastAPI, core, page) -> None:
         updates = {k: form[k] for k in keys if form.get(k) and not form[k].startswith("••••")}
         if group == "email":
             updates = clean_email_settings(updates)
+        for k in list(updates):  # keys and tokens never contain spaces: a terminal line wrap adds them when copied
+            if k in SECRET and k != "SMTP_PASSWORD":
+                updates[k] = re.sub(r"[\s\u00a0\u200b]+", "", updates[k])
         merged = {k: updates.get(k, os.environ.get(k, "")) for k in keys}
         try:
             if group == "stripe" and merged.get("STRIPE_SECRET_KEY"):

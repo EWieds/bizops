@@ -4,6 +4,7 @@ that agents hit over and over. They must not come back."""
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
 from bizops import maintenance, owner_setup
 from bizops.business import record_inbound
@@ -273,3 +274,21 @@ async def test_owner_can_choose_the_claude_token_over_an_api_key(settings, monke
     assert "ANTHROPIC_API_KEY" not in claude_cli.cli_env()  # so the CLI bills the subscription, not the key
     with pytest.raises(RuntimeError, match="browser session key"):
         await claude_cli.test_token("sk-ant-sid02-abc")
+
+
+def test_pasted_tokens_lose_line_wrap_spaces(core, org, monkeypatch):
+    import os
+    from bizops.web import connect
+    from bizops.web.app import create_app
+    from conftest import with_csrf
+
+    async def ok(token):
+        assert " " not in token
+        return "Claude token works."
+
+    monkeypatch.setattr("bizops.llm.claude_cli.test_token", ok)
+    with TestClient(create_app(core, run_scheduler=False)) as c:
+        with_csrf(c)
+        c.post("/connect/models", data={"MODEL_BACKEND": "claude_token",
+                                        "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-abc  def\nghi"}, follow_redirects=False)
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-abcdefghi"
