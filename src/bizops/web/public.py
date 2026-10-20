@@ -17,11 +17,11 @@ from collections import defaultdict, deque
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import ledger
-from ..business import record_payment, suppress, unsub_email, unsub_token
+from ..business import file_sig_ok, record_payment, suppress, unsub_email
 from ..connectors.billing import sandbox_ref
 from ..events import log_event
-from ..llm.base import response_cost
+from ..llm.base import price_micros
+from .auth import client_ip
 
 PUBLIC_PREFIXES = ("/s/", "/demo/", "/pay/", "/u/", "/f/", "/healthz", "/login", "/logout")
 
@@ -84,24 +84,28 @@ const j=await r.json();add('bot',j.reply);hist.push({{role:'assistant',content:j
         va = db.one("SELECT * FROM voice_agents WHERE id = ? AND status != 'paused'", (vid,))
         if not va:
             raise HTTPException(404)
-        ip = request.client.host if request.client else "?"
-        if limited(f"ip:{ip}", 60) or limited(f"va:{vid}", 300):
+        ip = client_ip(request)
+        lim = settings.policy.get("public", {})
+        if limited(f"ip:{ip}", int(lim.get("demo_per_ip_per_hour", 30))) or limited(f"va:{vid}", int(lim.get("demo_per_agent_per_hour", 200))):
             return JSONResponse({"reply": "This demo is busy right now, please try again later."})
         data = await request.json()
         history = [m for m in (data.get("history") or [])[-12:] if m.get("role") in ("user", "assistant")]
         history = [{"role": m["role"], "content": str(m.get("content", ""))[:600]} for m in history]
         if not history or history[-1]["role"] != "user":
             return JSONResponse({"reply": "Sorry, I didn't catch that."})
-        from ..tools.sales import voice_reply
+        from ..connectors.voice import receptionist_prompt
+        from ..gateway import RunStop, estimate_tokens, public_model_call
+        from ..tools.sales import voice_model, voice_reply
+        cfg = json.loads(va["config_json"])
+        model = "dry-run" if core.llm.name == "dry-run" else voice_model(settings)
+        est = price_micros(settings, model, estimate_tokens(receptionist_prompt(cfg), history) + 200, 400)
         try:
-            reply, resp = await voice_reply(core, json.loads(va["config_json"]), history)
+            reply, _ = await public_model_call(core, org_id=va["org_id"], action="demo", est_micros=est,
+                                               run=lambda: voice_reply(core, cfg, history))
+        except RunStop:
+            return JSONResponse({"reply": "This demo is resting for today. Please try again tomorrow, or email us."})
         except Exception:
             return JSONResponse({"reply": "Sorry, I'm having trouble right now. Please try again."})
-        if resp is not None:
-            cost = response_cost(settings, resp)
-            if cost:
-                ledger.record(db, org_id=va["org_id"], kind="model_cost", amount_micros=cost, source="model",
-                              memo=f"voice demo {vid}")
         return JSONResponse({"reply": reply})
 
     @app.get("/pay/{offer_id}", response_class=HTMLResponse)
@@ -147,7 +151,7 @@ Real checkouts go through Stripe once the owner connects it.</p><h2>{html.escape
 
     @app.get("/f/{aid}/{sig}")
     async def shared_file(aid: str, sig: str):
-        if unsub_token(settings, aid).split(".")[1] != sig:
+        if not file_sig_ok(aid, sig):
             raise HTTPException(404)
         row = db.one("SELECT * FROM artifacts WHERE id = ?", (aid,))
         if not row:

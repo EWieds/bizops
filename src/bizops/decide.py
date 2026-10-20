@@ -212,17 +212,38 @@ async def quality_gate(core, *, org_id: str, kind: str, text: str, context: dict
         "page": (PAGE_RUBRIC, float(q.get("page_min", 2.5)),
                  "Rate this public business web page (HTML) as a senior conversion designer would."),
     }[kind]
-    d = await core.decider.score({"content": clip(text, 12000), **(context or {})}, ask, rubric)
+    state = {"content": clip(text, 12000), **(context or {})}
+    d = await core.decider.score(state, ask, rubric)
     charge(core.db, org_id, d, f"quality:{kind}")
-    if d.value < minimum and d.confidence >= float(q.get("min_confidence", 0.5)):
-        fix = getattr(d, "fix", "") or {
+    # Jev returns an expected value over the rubric levels (a "good" email lands around 2.8-3.0), so it gets a
+    # small margin; the comparison uses the same rounding as the number shown, so "3.0 (needs 3)" can't fail.
+    bar = minimum - (float(q.get("jev_margin", 0.2)) if d.source == "jev" else 0.0)
+    if round(d.value, 1) < round(bar, 1) and d.confidence >= float(q.get("min_confidence", 0.5)):
+        fix = getattr(d, "fix", "") or await _critique(core, org_id, kind, state, ask, rubric) or {
             "outreach": "make it specific to this business, lead with their problem, one honest proof point, one easy question, under 120 words",
             "reply": "answer exactly what they asked, be specific and warm, give one clear next step",
             "customer": "be specific about what happens next and what you need from them",
             "page": "clear headline with the customer's problem, concrete offer and price, proof, one obvious call to action, mobile friendly",
         }[kind]
-        raise PolicyRefusal(f"quality.{kind}", f"scored {d.value:.1f}/4 (needs {minimum:g}) by {d.source}. Improve: {fix}")
+        raise PolicyRefusal(f"quality.{kind}", f"scored {d.value:.1f}/4 (needs {bar:.1f}) by {d.source}. Fix: {fix}")
     return d
+
+
+async def _critique(core, org_id: str, kind: str, state: dict, ask: str, rubric: list[str]) -> str:
+    """Specific, actionable feedback for a rejected draft (Jev scores but doesn't explain). Cheapest tier,
+    only on failure, so the author fixes the real problem instead of guessing."""
+    if core.llm.name == "dry-run":
+        return ""
+    levels = "\n".join(f"{i}: {r}" for i, r in enumerate(rubric))
+    try:
+        data, cost = await core.decider._llm(
+            f"{ask} It fell below 'good' on this rubric:\n{levels}\n<state>{clip(_text(state), 8000)}</state>\n"
+            "Name the 2-3 specific problems in THIS draft (quote the weak phrase) and how to fix each, in under 80 words.",
+            {"type": "object", "properties": {"fix": {"type": "string"}}, "required": ["fix"], "additionalProperties": False})
+    except Exception:
+        return ""
+    charge(core.db, org_id, Decision(None, 1.0, "llm", cost), f"quality:{kind} feedback")
+    return str(data.get("fix") or "").strip()
 
 
 async def deliverable_check(core, *, org_id: str, deliverable: str, result: str) -> Decision | None:

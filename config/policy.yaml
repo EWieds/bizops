@@ -34,6 +34,7 @@ hard_stops:
   new_payee: "Adding a payee to the allowlist"
   connect_email: "Connecting the email account agents send from (one time)"
   connect_billing: "Connecting the umbrella Stripe account (one time)"
+  billing_dispute: "Responding to a chargeback in Stripe (agents never contact a customer who disputed)"
 
 # Per-agent per-hour rate limits by tool name. '*' is the default for unlisted tools.
 rate_limits:
@@ -92,6 +93,25 @@ sales:
   revenue_holdback_days: 30         # revenue counts as cleared (allocatable) after refunds/chargebacks window
   b2b_only: true                    # outreach only to businesses, with a public source for the contact
 
+# Capital allocation (reinvestment). Only verified profit (cleared revenue net of refunds and chargebacks,
+# minus all spend) is allocatable. Waterfall: tax reserve -> operating reserve -> surplus split by two keys
+# (CEO proposes, CFO approves; disagreements go to the platform CEO). Enforced in capital.py.
+capital:
+  tax_reserve_pct: 25             # placeholder rate; set the real one with your accountant (not tax advice)
+  operating_reserve_months: 2     # each org keeps this many months of its own costs before surplus moves
+  min_reinvest_self_pct: 50       # unless both keys write down a reason
+  max_treasury_share_pct: 40      # no org receives more than this share of a month's treasury
+  max_cap_increase_pct: 25        # an org's cap rises at most this much per month
+  treasury_floor_usd: 100         # never spent
+  outcome_review_days: 60         # then the keys score the decision against what actually happened
+
+# Public pages anyone can use (no login). Model spend there is checked against the business's budget
+# BEFORE each call, plus this daily ceiling per business; visitors are rate limited by real client IP.
+public:
+  demo_daily_max_usd: 2.0
+  demo_per_ip_per_hour: 30
+  demo_per_agent_per_hour: 200
+
 # Sandbox market (only used while email or billing is not connected to a real provider).
 sandbox:
   reply_delay_s: 45               # how long simulated prospects take to answer
@@ -105,7 +125,8 @@ venture:
   research_every_days: 3          # the venture analyst runs a research cycle on its own this often (0 = off)
   proposals_per_cycle: 3
   auto_launch: true               # the platform CEO may launch strong proposals itself, inside the limits above
-  auto_launch_min_score: 3.6      # out of 5
+  auto_launch_min_score: 3.6      # out of 5, on the RED TEAM's scores (not the author's)
+  red_team_max_rounds: 3          # fix -> revise cycles before a proposal is parked
 
 # Quality bar: outbound work is scored against a professional rubric (0-4) before it ships, by Jev when
 # TYPESAFE_API_KEY is set, else by the cheapest Claude tier. Below the bar it is sent back with feedback.
@@ -116,6 +137,8 @@ quality:
   page_min: 2.5
   deliverable_min: 0.35    # "done" must actually meet the task's deliverable
   min_confidence: 0.5
+  jev_margin: 0.2          # Jev scores are expected values (a "good" email averages ~2.8-3.0): bar minus this
+  max_rejections_per_recipient: 3   # then stop rewriting that email for 24h and get help instead
 
 # Cheap, fast routing with Jev (or the cheapest Claude tier when Jev isn't configured).
 routing:

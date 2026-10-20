@@ -64,6 +64,23 @@ send_email (compliance in code) -> replies arrive (IMAP poll) -> send_payment_li
 Stripe reports the payment (event poll, no public webhook needed) -> revenue in the ledger (connector
 source, per business, 30-day holdback before it counts as cleared) -> customer created -> customer
 success onboards and delivers -> goals with a metric_key are measured from this data automatically.
+The same poll applies renewals (invoice.paid, matched to the first checkout through the subscription),
+refunds (charge.refunded, cumulative, so replays are harmless) and chargebacks (charge.dispute.*:
+reversed when opened, restored only if won, plus a Needs-you item to respond in Stripe). Reversals are new
+`revenue_reversal` ledger rows; `ledger.revenue` and `business.cleared_revenue_cents` are always net.
+
+## Capital allocation (capital.py, tools/capital.py)
+Monthly, once a month's holdback has passed, `capital_cycle` closes it per org: verified profit (cleared
+revenue net of refunds/disputes, minus all spend) -> 25% tax reserve -> operating reserve (2 months of
+costs) -> surplus. Two keys: the org CEO proposes (reinvest in self and/or send to the platform treasury,
+with reasoning, numbers and expected result); the CFO (or the platform CFO if the org has none) scores and
+approves (executes) or rejects (escalates to the platform CEO). The platform CEO proposes treasury -> org
+moves; the platform CFO is the second key. Reinvesting raises the recipient's monthly cap. Guardrails in
+`check_proposal`, re-checked at execution: verified profit only; >= 50% reinvested in self unless both keys
+write a case; no org gets > 40% of a month's treasury; trial orgs <= venture cap; losing orgs need a case;
+caps rise <= 25%/month and stay inside the platform cap; the treasury floor is never spent; there is no
+way to move money out (owner distributions are a hard stop). Executed allocations go to the auditor and
+are later scored against what happened. Money page: treasury, reserves, each org's waterfall, decision log.
 
 Compliance enforced in code: B2B only with a public source, sender identity + postal address +
 one-click unsubscribe on every email, suppression list, unsubscribe replies honored automatically,
@@ -81,11 +98,39 @@ public customer-facing routes: /s/<business>/<page> websites, /demo/<agent> live
 /pay/<offer> checkout, /u/<token> unsubscribe, /f/<file>/<sig> shared deliverables. Deploy:
 Dockerfile + fly.toml + scripts/deploy-fly.sh, or `bizops serve --tunnel` from a computer.
 
+Security (security.py, web/auth.py): BIZOPS_SECRET is required (>= 32 chars; the app refuses to start
+without it, dry runs get a throwaway one) and each use derives its own key (file links, sessions...).
+Owner sessions are server-side (`sessions` table stores only a hash of the cookie) and revocable; changing
+the password logs everyone out. 5 failed logins per address in 15 min lock it for 15 min. Every dashboard
+POST needs the CSRF token (header from htmx, hidden field added to forms by base.html; double-submit cookie
+when there is no password). Client IPs come from fly-client-ip / cf-connecting-ip only when actually behind
+that proxy. The public voice demo goes through `gateway.public_model_call`: kill switch, org budget and a
+per-business daily ceiling are checked BEFORE the model call.
+
 ## Ideas pipeline (ideas.py, tools/ideas.py)
 maintenance runs research_cycle every venture.research_every_days: it tasks the venture analyst, who
 submits proposals (submit_proposal: weighted 1-5 scores, sourced evidence, plan, kill criteria; duplicates
-refused). The platform CEO gets each one and, under the standing authorization (venture.auto_launch), launches
-strong ones with decide_proposal inside the venture budget. The owner can launch any proposal from /ideas.
+refused) with a full business case: price + model + sourced competitor prices, exactly who the first 10
+customers are and how we reach them, channels with cost and conversion, positioning, startup and monthly
+costs, CAC / margin / LTV, days to first revenue, monthly projections, assumptions, pre-mortem.
+`ideas.validate_case` recomputes the arithmetic (profit, cumulative profit, break-even) and flags optimism
+(revenue > customers x price, LTV/CAC < 3, CAC $0, margin < 50%, slow first sale, hockey sticks, burn vs
+budget). Every proposal then goes to the independent red team (role red_team: no parent, like the auditor;
+can't write proposals or review its own). Its review must be thorough (enforced: risks with likelihood and
+impact, sourced counter-evidence, 3+ challenged assumptions, its own scores on every criterion, its own
+conservative projection); owner ideas need more (5 risks, 2 counter-evidence) and the brief says no
+deference. Verdict: go -> 'new' (decidable), fix -> back to the author (revise_proposal, max
+venture.red_team_max_rounds), no_go -> parked. Only then is the platform CEO told. Agents launch only a 'go'
+with a red-team score >= auto_launch_min_score and positive red-team month-6 profit, inside the venture
+budget; the owner can overrule from /ideas (recorded as an override). Owner ideas (/new, chat "launch")
+go through the analyst and red team like everything else; there is no direct create-business path. On
+launch the brief carries the business case and red-team review, and two measured goals are seeded (first
+paying customer by the red team's timeline; revenue on plan for 60 days).
+Owner research parameters (Ideas page, stored in settings `venture:params`): guidance (focus, avoid,
+geography, customer type, models, risk tolerance, owner involvement, notes) is shown to the analyst, red team
+and platform CEO on every wake and in research/red-team tasks; hard limits (max startup / monthly cost, max
+days to first revenue, min price, min month-6 profit) refuse research proposals in code and only flag the
+owner's own ideas.
 
 ## Chat and media (web/app.py chat_post, media.py)
 Owner messages can carry files (PDF/DOCX/text/CSV: original + extracted text saved as artifacts) and

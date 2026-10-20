@@ -176,6 +176,9 @@ def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str,
                      "and delete stale notes with note_delete this run.")
     if kb:
         lines.append("Org knowledge base keys: " + ", ".join(k["key"] for k in kb))
+    if agent["role"] in ("venture_analyst", "red_team", "platform_ceo"):
+        from .ideas import get_params, params_text
+        lines.append("\n## The owner's research parameters (for new business ideas)\n" + params_text(get_params(db)))
     lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} of {fmt_usd(agent['budget_micros'])} this month")
     if "money" in g:
         lines.append(f"- org wallet: {fmt_usd(ledger.wallet_balance(db, agent['org_id']))}")

@@ -11,8 +11,9 @@ customers and delivers, around the clock, inside spending caps and legal rules e
 bash scripts/deploy-fly.sh
 ```
 
-Creates an always-on server on Fly.io with HTTPS, gives Claude access through your subscription
-(`claude setup-token`, no API key needed) and prints your dashboard URL and owner password.
+Creates an always-on server on Fly.io with HTTPS, asks for your Anthropic API key (the supported route
+for an always-on server; set a monthly spend limit in the Anthropic console) and prints your dashboard URL
+and owner password. A random signing secret (BIZOPS_SECRET) is created once and kept.
 Needs a Fly.io account (fly.io, card on file).
 
 ## Or run it on your computer
@@ -36,8 +37,9 @@ waits in your Needs-you queue.
 ## Using it day to day
 
 - **Ideas** page: the venture analyst researches on its own every 3 days and submits scored proposals
-  (evidence with sources, customer, offer, 60-day plan, kill criteria). The platform CEO launches strong ones
-  within your venture limits, or you press Launch now / Park / Reject.
+  with a full business case (price, how to get the first customers, marketing, costs, projected profit, time
+  to first money). An independent red team attacks every proposal, yours hardest, before anything launches.
+  The platform CEO launches only what survives, within your venture limits; you can still Launch / Park / Reject.
 - **Chat**: talk to the platform CEO, any business CEO or the auditor. Attach PDFs, Word docs, text or CSV,
   or paste YouTube links (transcripts are pulled automatically), then press **Business plan**,
   **Build a website** or **Launch as a business**. Replies arrive in the thread with links to the files

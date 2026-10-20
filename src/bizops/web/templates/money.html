@@ -11,6 +11,22 @@
 <td><form method="post" action="/money/deposit" class="flex gap-1"><input type="hidden" name="org_id" value="{{ o.id }}"><input name="amount" size="5" class="border rounded p-1 text-xs" placeholder="$"><button class="text-xs px-2 rounded bg-slate-800 text-white">add</button></form></td></tr>{% endfor %}
 </tbody></table>
 {% endcall %}
+{% call card("Capital allocation (verified profit only)") %}
+<div class="grid grid-cols-3 gap-3 text-xs mb-3">
+<div class="border rounded p-2"><div class="text-slate-500">Platform treasury</div><b class="text-base">{{ cap.treasury|usd }}</b></div>
+<div class="border rounded p-2"><div class="text-slate-500">Tax reserve (untouchable)</div><b class="text-base">{{ cap.tax_reserve|usd }}</b></div>
+<div class="border rounded p-2"><div class="text-slate-500">Operating reserves</div><b class="text-base">{{ cap.operating_reserve|usd }}</b></div></div>
+<p class="text-xs text-slate-500 mb-2">Each month, after the {{ holdback }}-day refund and chargeback holdback: cleared revenue minus all costs = verified profit, then tax reserve, then operating reserve, then the surplus is split by two keys (CEO proposes, CFO approves).</p>
+<table class="w-full text-xs"><thead class="text-left text-slate-500"><tr><th>Month</th><th>Business</th><th>Cleared revenue</th><th>Costs</th><th>Verified profit</th><th>Tax</th><th>Op. reserve</th><th>Surplus</th><th>Reinvested</th><th>To treasury</th></tr></thead><tbody>
+{% for p in cap.periods %}<tr class="border-t"><td>{{ p.month }}</td><td>{{ p.org_name }}</td><td>{{ p.cleared_revenue_micros|usd }}</td><td>{{ p.costs_micros|usd }}</td>
+<td class="{{ 'text-green-700' if p.verified_profit_micros > 0 else 'text-red-700' }}">{{ p.verified_profit_micros|usd }}</td><td>{{ p.tax_reserve_micros|usd }}</td><td>{{ p.operating_reserve_micros|usd }}</td><td><b>{{ p.surplus_micros|usd }}</b></td><td>{{ p.reinvested|usd }}</td><td>{{ (p.allocated - p.reinvested)|usd }}</td></tr>
+{% else %}<tr><td colspan="10" class="text-slate-500 py-1">No closed months yet. A month closes {{ holdback }} days after it ends.</td></tr>{% endfor %}
+</tbody></table>
+<div class="mt-3 text-xs font-semibold">Decision log</div>
+{% for a in cap.allocations %}<div class="border-t py-1 text-xs"><span class="pill">{{ a.status }}</span> <b>{{ a.amount_micros|usd }}</b> {{ a.from_name or 'treasury' }} → {{ a.to_name or 'treasury' }} · proposed by {{ a.proposer }}{% if a.reviewer %} · CFO {{ a.reviewer }} scored {{ a.cfo_score }}{% endif %}
+<div class="text-slate-600">{{ a.reason }} <span class="text-slate-500">Expected: {{ a.expected_result }}</span>{% if a.actual_result %} <span class="text-slate-700">Actual: {{ a.actual_result }}{% if a.outcome_score is not none %} ({{ a.outcome_score }}/10){% endif %}</span>{% endif %}</div></div>
+{% else %}<div class="text-xs text-slate-500">No allocations yet.</div>{% endfor %}
+{% endcall %}
 {% call card("Allowlisted payees") %}
 <form method="post" action="/money/payee" class="flex flex-wrap gap-2 items-end text-xs mb-2">
   <label>Name<br><input name="name" required class="border rounded p-1"></label>

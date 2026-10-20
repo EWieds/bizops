@@ -225,8 +225,12 @@ def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[s
     if force or _due(db, "ideas", 600):
         from . import ideas
         out["research_cycle"] = int(ideas.research_cycle(db, settings))
+        out["red_team_queued"] = ideas.red_team_backlog(db, settings)
     if force or _due(db, "mgmt", 600):
         out["management_reviews"] = management_reviews(db, settings)
+    if force or _due(db, "capital", 3600):
+        from .capital import capital_cycle
+        out["capital_periods"] = capital_cycle(db, settings)
     if force or _due(db, "followups", 900):
         out["followups"] = business.followups_due(db, settings)
     acted = {k: v for k, v in out.items() if v}

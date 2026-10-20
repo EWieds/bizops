@@ -68,3 +68,63 @@ async def test_smart_inbound_triage_quarantines_and_skips(core, org):
     assert core.db.scalar("SELECT COUNT(*) AS n FROM messages WHERE recipient_id = ? AND sender_kind = 'system' "
                           "AND body LIKE 'Email reply%'", (org["marketer"]["id"],)) == 0
     assert core.db.scalar("SELECT COUNT(*) AS n FROM audit_findings WHERE summary LIKE 'Suspicious%'") == 1
+
+
+@pytest.mark.parametrize("score, passes", [(2.96, True), (2.8, True), (2.74, False)])
+async def test_jev_scores_use_a_margin_and_the_shown_rounding(core, org, monkeypatch, score, passes):
+    """'scored 3.0/4 (needs 3)' must never be a refusal; Jev's expected-value scores get a small margin."""
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts_test")
+    http, _ = fake_jev({"score": {"type": "score", "score": score, "confidence": 0.9, "legend": {}, "probabilities": {}}})
+    core.decider.http = http
+    if passes:
+        assert await quality_gate(core, org_id=org["org"], kind="outreach", text="Hi Sam, ...")
+    else:
+        with pytest.raises(PolicyRefusal) as e:
+            await quality_gate(core, org_id=org["org"], kind="outreach", text="Hi Sam, ...")
+        assert "needs 2.8" in e.value.detail
+
+
+async def test_rejection_gives_specific_feedback(core, org, monkeypatch):
+    """Jev only scores, so a rejection asks the cheapest model what exactly is wrong with this draft."""
+    from bizops import decide
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts_test")
+    http, _ = fake_jev({"score": {"type": "score", "score": 1.5, "confidence": 0.9, "legend": {}, "probabilities": {}}})
+    core.decider.http = http
+
+    async def fake_llm(prompt, schema):
+        assert "THIS draft" in prompt and "Buy our stuff" in prompt
+        return {"fix": "'Buy our stuff' is a generic pitch: name their missed calls instead."}, 1234
+    monkeypatch.setattr(core.decider, "_llm", fake_llm)
+    monkeypatch.setattr(core.llm, "name", "api")
+    with pytest.raises(PolicyRefusal) as e:
+        await decide.quality_gate(core, org_id=org["org"], kind="outreach", text="Buy our stuff")
+    assert "name their missed calls" in e.value.detail
+    assert core.db.one("SELECT 1 AS x FROM ledger_entries WHERE memo LIKE '%quality:outreach feedback%'")
+
+
+async def test_rewrites_to_one_recipient_are_capped(core, org, monkeypatch):
+    """After 3 rejected drafts to the same lead in a day, stop paying to score more rewrites."""
+    from bizops import business
+    from bizops.gateway import invoke
+    from bizops.tools import Ctx
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts_test")
+    http, seen = fake_jev({"score": {"type": "score", "score": 1.0, "confidence": 0.9, "legend": {}, "probabilities": {}}})
+    core.decider.http = http
+    lead = business.add_lead(core.db, org_id=org["org"], agent=org["ceo"], company="Acme", email="a@acme.com",
+                             source_url="https://acme.com")
+    other = business.add_lead(core.db, org_id=org["org"], agent=org["ceo"], company="Beta", email="b@beta.com",
+                              source_url="https://beta.com")
+    ctx = Ctx(core=core, agent=org["ceo"])
+    core.db.execute("UPDATE agents SET grants_json = ? WHERE id = ?", (json.dumps(["crm", "email", "sales"]), org["ceo"]["id"]))
+    ctx.agent = core.db.one("SELECT * FROM agents WHERE id = ?", (org["ceo"]["id"],))
+    for i in range(3):
+        r = await invoke(ctx, "send_email", {"lead_id": lead["id"], "subject": "Hi", "body": f"draft {i}"})
+        assert "quality.outreach" in r.content
+    def scores():
+        return sum(1 for _, _, body in seen if body["questions"]["q"]["type"] == "score")
+    calls = scores()
+    r = await invoke(ctx, "send_email", {"lead_id": lead["id"], "subject": "Hi", "body": "draft 4"})
+    assert "quality.retry_limit" in r.content and "move on to other leads" in r.content
+    assert scores() == calls  # refused before paying for another quality score
+    r = await invoke(ctx, "send_email", {"lead_id": other["id"], "subject": "Hi", "body": "draft"})
+    assert "quality.outreach" in r.content  # other leads are unaffected

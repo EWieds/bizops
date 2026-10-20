@@ -1,7 +1,7 @@
 # The root org (holding company). Same engine as every business, different data.
 # Agents reference roles in config/roles.yaml; `focus` adds org-specific instructions.
 name: bizops platform
-monthly_cap_usd: 50
+monthly_cap_usd: 60
 settings: {max_agents: 12, max_depth: 4, max_reports: 6}
 playbook: |
   The platform oversees every business: spending, health, auditing, and research into new businesses.
@@ -14,5 +14,6 @@ agents:
   - {key: coo, role: platform_coo, name: Portfolio COO, parent: ceo, budget_usd: 5}
   - {key: cfo, role: platform_cfo, name: Chief Investment Officer, parent: ceo, budget_usd: 8}
   - {key: analyst, role: venture_analyst, name: Venture Analyst, parent: ceo, budget_usd: 8}
-  # The auditor reports to the owner, not to the CEO: no parent in the tree.
+  # The auditor and the red team report to the owner, not to the CEO: no parent in the tree.
   - {key: auditor, role: auditor, name: Outside Auditor, budget_usd: 10}
+  - {key: redteam, role: red_team, name: Red Team Partner, budget_usd: 8}

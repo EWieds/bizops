@@ -149,6 +149,33 @@ def _all_results(hist: list[dict]) -> str:
     return " ".join(_last_results(hist))
 
 
+DEMO_CASE = {
+    "pricing": {"price_usd": 149, "model": "monthly",
+                "rationale": "One missed job is worth $300+ to a plumber; $149/month pays for itself with one saved call.",
+                "competitor_prices": [{"name": "Smith.ai", "price": "$97-$292/mo", "source_url": "https://example.com/pricing"}]},
+    "acquisition": {"first_customers": "Owner-operated dental, HVAC and plumbing shops in Columbus with public emails on "
+                                       "their sites; we send each a personalized live demo of a receptionist trained on their own FAQs.",
+                    "channels": [{"channel": "cold email", "tactic": "personalized live demo link per business",
+                                  "cost_usd": 20, "expected_conversion_pct": 2}]},
+    "marketing": {"positioning": "The receptionist that never misses a call, for trades that lose jobs to voicemail",
+                  "message": "Never miss another call: try your own AI receptionist in 30 seconds."},
+    "costs": {"startup_usd": 20, "monthly_usd": 45, "breakdown": [{"item": "voice minutes + model", "usd": 30},
+                                                                    {"item": "email tooling", "usd": 15}]},
+    "unit_economics": {"cac_usd": 60, "gross_margin_pct": 70, "ltv_usd": 900, "payback_months": 1},
+    "time_to_first_revenue_days": 21,
+    "projections": [{"month": 1, "customers": 1, "revenue_usd": 149, "costs_usd": 60},
+                    {"month": 2, "customers": 3, "revenue_usd": 447, "costs_usd": 90},
+                    {"month": 3, "customers": 5, "revenue_usd": 745, "costs_usd": 120},
+                    {"month": 4, "customers": 7, "revenue_usd": 1043, "costs_usd": 150},
+                    {"month": 5, "customers": 9, "revenue_usd": 1341, "costs_usd": 180},
+                    {"month": 6, "customers": 11, "revenue_usd": 1639, "costs_usd": 210}],
+    "assumptions": [{"assumption": "2% of personalized emails convert to a paid trial", "basis": "B2B cold email benchmarks"},
+                    {"assumption": "Monthly churn under 8%", "basis": "SMB SaaS averages"},
+                    {"assumption": "Voice cost about $0.10/minute", "basis": "voice platform pricing pages"}],
+    "risks": ["Low reply rates to cold email", "Churn after month 2", "Competitors undercut on price"],
+}
+
+
 def selling_flows(ctx: dict) -> tuple[list[list[Turn]], set[str], set[str]]:
     """Returns (flows, handled message ids, handled task ids)."""
     agent = ctx.get("agent", {})
@@ -171,11 +198,15 @@ def selling_flows(ctx: dict) -> tuple[list[list[Turn]], set[str], set[str]]:
                                                 "opportunities; I'll launch the best one inside the venture budget and tell you.",
                                                 "reason": "acknowledge the owner"})]])
                 done_msgs.add(m["id"])
-        # Platform: a scored proposal arrived -> decide it (standing authorization) and tell the owner.
-        elif "venture" in g and m["from_kind"] == "system" and body.startswith("New proposal"):
+        # Platform: a red-teamed proposal arrived -> decide it (standing authorization) and tell the owner.
+        elif "venture" in g and m["from_kind"] == "system" and body.startswith("Reviewed proposal"):
             pid = (_ids(body, "prop") or [None])[0]
-            score = re.search(r"scored ([0-9.]+)/5", body)
-            strong = score and float(score.group(1)) >= 3.6 and "Standing authorization" in body
+            score = re.search(r"adjusted score ([0-9.]+)/5", body)
+            strong = (score and float(score.group(1)) >= 3.6 and "verdict go" in body and "Standing authorization" in body)
+            if "Standing authorization" not in body:  # sent back to the author, or parked: just pass it on
+                flows.append([[("reply_human", {"text": "Update from the red team: " + clip(body, 300), "reason": "keep the owner informed"})]])
+                done_msgs.add(m["id"])
+                continue
             if pid:
                 flows.append([[("decide_proposal", {"proposal_id": pid, "decision": "approve" if strong else "park",
                                                      "reason": "Strong score and evidence; launch a capped trial." if strong
@@ -277,7 +308,44 @@ def selling_flows(ctx: dict) -> tuple[list[list[Turn]], set[str], set[str]]:
         title = t["title"].lower()
         if t["status"] == "blocked":
             continue
-        if "ideas" in g and (title.startswith("research cycle") or "propose" in title):
+        if "redteam" in g and title.startswith("red-team prop_"):
+            pid = (_ids(title, "prop") or [""])[0]
+            flows.append([[("get_proposal", {"proposal_id": pid, "reason": "read the full case before attacking it"}),
+                           ("web_search", {"query": "AI receptionist small business churn complaints", "reason": "look for counter-evidence"})],
+                          [("red_team_review", {
+                              "proposal_id": pid, "verdict": "go",
+                              "summary": "Real, paid demand and a cheap capped test. Main risks: churn after month 2, crowded market, "
+                                         "and cold email reply rates below the plan. Worth a 60-day test with sharper kill criteria.",
+                              "fatal_flaws": [],
+                              "risks": [{"risk": "Cold email replies under 2% (plan assumes 5%)", "likelihood": "high", "impact": "medium",
+                                         "mitigation": "Lead with a personalized live demo; kill at day 30 if <2%"},
+                                        {"risk": "Churn after the novelty wears off", "likelihood": "medium", "impact": "high",
+                                         "mitigation": "Monthly call-handling report showing booked jobs"},
+                                        {"risk": "Incumbents bundle the same feature for free", "likelihood": "medium", "impact": "high",
+                                         "mitigation": "Niche on one trade with trade-specific scripts"},
+                                        {"risk": "Voice quality complaints from callers", "likelihood": "medium", "impact": "medium",
+                                         "mitigation": "Human-sounding voice, quick transfer to the owner's phone"},
+                                        {"risk": "Owner-only steps (telephony account) delay first sale", "likelihood": "medium",
+                                         "impact": "medium", "mitigation": "Start with web demo + forwarding from existing number"}],
+                              "counter_evidence": [{"claim": "Many competitors already sell AI receptionists from $49/month",
+                                                    "source_url": "https://example.com/competitor-pricing"},
+                                                   {"claim": "Small-business owners report frustration with robotic phone agents",
+                                                    "source_url": "https://example.com/forum-complaints"}],
+                              "assumption_challenges": [
+                                  {"assumption": "5% reply rate", "challenge": "Cold B2B email to trades averages 1-3%", "revised_value": "2%"},
+                                  {"assumption": "$149/month price", "challenge": "Entry competitors sit at $49-99", "revised_value": "$99-149"},
+                                  {"assumption": "3 customers by day 45", "challenge": "Sales cycle includes a trial", "revised_value": "1-2"}],
+                              "revised_scores": {"demand": 4, "time_to_revenue": 4, "automation_fit": 4, "cost_to_test": 4,
+                                                 "competition": 3, "legal_risk": 4, "owner_steps": 3},
+                              "revised_projection": {"time_to_first_revenue_days": 28, "month3_profit_usd": 120,
+                                                     "month6_profit_usd": 700, "breakeven_month": 3},
+                              "kill_criteria": "Under 2% replies by day 30 or under 2 paying customers by day 60.",
+                              "reason": "independent review"})],
+                          lambda hist, t=t: [("update_task", {"task_id": t["id"], "status": "done",
+                                                              "result": f"Review submitted: {clip(_all_results(hist), 120)}",
+                                                              "reason": "review complete"})]])
+            done_tasks.add(t["id"])
+        elif "ideas" in g and (title.startswith("research cycle") or "propose" in title or title.startswith("owner idea")):
             flows.append([[("web_search", {"query": "AI receptionist for small businesses pricing demand", "reason": "evidence"})],
                           [("submit_proposal", {
                               "title": "Columbus AI Receptionists", "summary": "AI phone receptionists for local service businesses that miss calls.",
@@ -288,7 +356,8 @@ def selling_flows(ctx: dict) -> tuple[list[list[Turn]], set[str], set[str]]:
                               "plan": "Week 1: demo + site. Weeks 2-3: 100 personalized emails with live demos. Day 45: 3 paying customers.",
                               "starting_budget_usd": 50, "kill_criteria": "Fewer than 2 paying customers or <5% replies by day 60.",
                               "scores": {"demand": 4, "time_to_revenue": 4, "automation_fit": 4, "cost_to_test": 4, "competition": 3,
-                                         "legal_risk": 4, "owner_steps": 3}, "source": "research", "reason": "best idea this cycle"})],
+                                         "legal_risk": 4, "owner_steps": 3}, "business_case": DEMO_CASE,
+                              "source": "owner" if title.startswith("owner idea") else "research", "reason": "best idea this cycle"})],
                           lambda hist, t=t: [("update_task", {"task_id": t["id"], "status": "done",
                                                               "result": f"Proposal submitted: {clip(_all_results(hist), 120)}",
                                                               "reason": "cycle complete"})]])

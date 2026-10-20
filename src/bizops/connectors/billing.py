@@ -1,8 +1,10 @@
 """Collecting money: offers (products + prices + payment links) and incoming payments.
 
 Real mode: Stripe (STRIPE_SECRET_KEY, ideally a restricted key with Products, Prices, Payment Links
-write and Checkout Sessions/Events read). Payments are found by polling Stripe events, so no public
-webhook is needed. Money lands in the owner's Stripe balance and pays out to their bank.
+write and Checkout Sessions/Events/Invoices/Charges/Disputes read). Money is tracked by polling Stripe
+events, so no public webhook is needed: first checkouts, subscription renewals (invoice.paid), refunds
+(charge.refunded) and chargebacks (charge.dispute.*). Money lands in the owner's Stripe balance and pays
+out to their bank.
 Sandbox mode: payment links point at the local public app's test checkout (/pay/<offer>).
 """
 
@@ -56,7 +58,7 @@ class StripeBilling:
         self.key = settings.secret("STRIPE_SECRET_KEY") or ""
         self.http = http
 
-    async def _req(self, method: str, path: str, data: dict | None = None, params: dict | None = None) -> dict:
+    async def _req(self, method: str, path: str, data: dict | None = None, params: Any = None) -> dict:
         client = self.http or httpx.AsyncClient(timeout=30)
         try:
             r = await client.request(method, f"{STRIPE}{path}", data=data, params=params,
@@ -95,24 +97,70 @@ class StripeBilling:
         return f"{offer['payment_url']}?{urlencode({'client_reference_id': lead_id})}" if lead_id else offer["payment_url"]
 
     async def poll_payments(self, cursor: str | None) -> tuple[list[dict[str, Any]], str | None]:
-        params: dict[str, Any] = {"type": "checkout.session.completed", "limit": 50}
-        if cursor:
-            params["ending_before"] = cursor
-        data = await self._req("GET", "/events", params=params)
-        events = data.get("data", [])
-        out = []
-        for ev in events:
-            s = ev["data"]["object"]
-            if s.get("payment_status") not in ("paid", "no_payment_required"):
-                continue
-            out.append({"provider_ref": s["id"], "amount_cents": int(s.get("amount_total") or 0),
-                        "currency": s.get("currency") or "usd",
-                        "payer_email": (s.get("customer_details") or {}).get("email"),
-                        "lead_id": s.get("client_reference_id"),
-                        "offer_id": (s.get("metadata") or {}).get("bizops_offer"),
-                        "payment_link": s.get("payment_link")})
-        new_cursor = events[0]["id"] if events else cursor
-        return out, new_cursor
+        """Money events since `cursor`, oldest first, normalized (see parse_event)."""
+        events: list[dict] = []
+        for _ in range(20):  # at most 1000 events per poll; the rest come next poll
+            params: list[tuple[str, Any]] = [("limit", 50)] + [("types[]", t) for t in EVENT_TYPES]
+            if cursor:
+                params.append(("ending_before", cursor))
+            data = await self._req("GET", "/events", params=params)
+            page = data.get("data", [])  # newest first
+            if not page:
+                break
+            events = page + events
+            cursor = page[0]["id"]
+            if not cursor or not data.get("has_more"):
+                break
+        out = [p for ev in reversed(events) if (p := parse_event(ev))]
+        return out, (events[0]["id"] if events else cursor)
+
+
+EVENT_TYPES = ("checkout.session.completed", "invoice.paid", "charge.refunded", "charge.dispute.created",
+               "charge.dispute.funds_withdrawn", "charge.dispute.funds_reinstated", "charge.dispute.closed")
+
+
+def _id(v: Any) -> str | None:
+    return v.get("id") if isinstance(v, dict) else v
+
+
+def parse_event(ev: dict) -> dict[str, Any] | None:
+    """One Stripe event -> {"kind": payment|refund|dispute, ...} or None if it moves no money for us."""
+    t, o = ev.get("type", ""), ev["data"]["object"]
+    if t == "checkout.session.completed":
+        if o.get("payment_status") not in ("paid", "no_payment_required"):
+            return None
+        return {"kind": "payment", "provider_ref": o["id"], "amount_cents": int(o.get("amount_total") or 0),
+                "currency": o.get("currency") or "usd",
+                "payer_email": (o.get("customer_details") or {}).get("email"),
+                "lead_id": o.get("client_reference_id"), "offer_id": (o.get("metadata") or {}).get("bizops_offer"),
+                "payment_link": o.get("payment_link"), "payment_intent": _id(o.get("payment_intent")),
+                "invoice": _id(o.get("invoice")), "subscription": _id(o.get("subscription"))}
+    if t == "invoice.paid":
+        if o.get("billing_reason") == "subscription_create":
+            return None  # the first invoice of a subscription is the checkout session we already counted
+        if not int(o.get("amount_paid") or 0):
+            return None
+        sub = _id(o.get("subscription")) or _id(((o.get("parent") or {}).get("subscription_details") or {}).get("subscription"))
+        meta = (o.get("subscription_details") or (o.get("parent") or {}).get("subscription_details") or {}).get("metadata") or {}
+        lines = (o.get("lines") or {}).get("data") or []
+        price_id = None
+        if lines:
+            line = lines[0]
+            price_id = _id(line.get("price")) or _id(((line.get("pricing") or {}).get("price_details") or {}).get("price"))
+        return {"kind": "payment", "provider_ref": o["id"], "amount_cents": int(o["amount_paid"]),
+                "currency": o.get("currency") or "usd", "payer_email": o.get("customer_email"),
+                "lead_id": None, "offer_id": meta.get("bizops_offer"), "payment_link": None, "price_id": price_id,
+                "payment_intent": _id(o.get("payment_intent")), "invoice": o["id"], "charge": _id(o.get("charge")),
+                "subscription": sub, "renewal": True}
+    if t == "charge.refunded":
+        return {"kind": "refund", "provider_ref": ev["id"], "charge": o["id"],
+                "payment_intent": _id(o.get("payment_intent")), "invoice": _id(o.get("invoice")),
+                "refunded_total_cents": int(o.get("amount_refunded") or 0), "currency": o.get("currency") or "usd"}
+    if t.startswith("charge.dispute."):
+        return {"kind": "dispute", "provider_ref": ev["id"], "event": t.removeprefix("charge.dispute."),
+                "dispute_id": o["id"], "charge": _id(o.get("charge")), "payment_intent": _id(o.get("payment_intent")),
+                "amount_cents": int(o.get("amount") or 0), "status": o.get("status") or ""}
+    return None
 
 
 def make_billing(settings: Settings) -> BillingProvider:

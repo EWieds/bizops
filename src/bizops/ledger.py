@@ -5,6 +5,7 @@ Kinds and who may write them:
   payment, payment_reversal   the pay tool via the payment provider
   deposit                 human only (owner funds an org wallet)
   revenue                 connector or human only (or the sandbox, kept separate); agents can never write it
+  revenue_reversal        refunds and chargebacks, same writers as revenue; revenue() is always net of them
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ ALLOWED_SOURCES = {
     "payment_reversal": {"provider", "human"},
     "deposit": {"human"},
     "revenue": {"connector", "human", "sandbox"},
+    "revenue_reversal": {"connector", "human", "sandbox"},
 }
 
 
@@ -92,10 +94,12 @@ def payments_since(target: Database | sqlite3.Connection, org_id: str, since: st
 
 def revenue(target: Database | sqlite3.Connection, *, since: str, org_id: str | None = None,
             sandbox: bool = False) -> int:
-    """Revenue since a timestamp. Real revenue (connector/human) and sandbox revenue never mix."""
-    where = "kind = 'revenue' AND ts >= ? AND source " + ("= 'sandbox'" if sandbox else "IN ('connector','human')")
+    """Net revenue (minus refunds and chargebacks) since a timestamp. Real revenue (connector/human) and
+    sandbox revenue never mix."""
+    where = "kind IN ('revenue','revenue_reversal') AND ts >= ? AND source " + ("= 'sandbox'" if sandbox else "IN ('connector','human')")
     params: list = [since]
     if org_id:
         where += " AND org_id = ?"
         params.append(org_id)
-    return _q(target, f"SELECT COALESCE(SUM(amount_micros), 0) FROM ledger_entries WHERE {where}", tuple(params))
+    return _q(target, "SELECT COALESCE(SUM(CASE WHEN kind = 'revenue' THEN amount_micros ELSE -amount_micros END), 0) "
+              f"FROM ledger_entries WHERE {where}", tuple(params))

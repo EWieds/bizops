@@ -12,7 +12,35 @@ from .core import Core
 
 def _core(args: argparse.Namespace) -> Core:
     settings = Settings.load(db_path=getattr(args, "db", None), dry_run=getattr(args, "dry_run", None) or None)
+    _require_secret(settings)
     return Core(settings).init()
+
+
+def _require_secret(settings: Settings) -> None:
+    """A dry run (no real customers or money) gets a throwaway random secret for this process; anything
+    live refuses to run without a real one."""
+    import os
+
+    from .security import MissingSecret, check_secret, new_secret
+    try:
+        check_secret()
+    except MissingSecret as e:
+        if settings.dry_run:
+            os.environ["BIZOPS_SECRET"] = new_secret()
+            print("bizops: no BIZOPS_SECRET; using a temporary one for this dry run (logins and links reset on "
+                  "restart). Run `bizops init-secret` to keep one.", file=sys.stderr)
+            return
+        sys.exit(f"bizops: {e}")
+
+
+def cmd_init_secret(args: argparse.Namespace) -> None:
+    import os
+
+    from .web.auth import init_secret
+    settings = Settings.load(db_path=getattr(args, "db", None))
+    had = bool(os.environ.get("BIZOPS_SECRET"))
+    init_secret(settings.home / ".env")
+    print("BIZOPS_SECRET already set" if had else f"wrote a new BIZOPS_SECRET to {settings.home / '.env'}")
 
 
 def _bootstrap_security(core) -> str | None:
@@ -63,6 +91,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="warning"))
         proc = None
         if args.tunnel:
+            os.environ["BIZOPS_BEHIND_CLOUDFLARE"] = "1"  # trust cf-connecting-ip for lockout and rate limits
             from .tunnel import start_quick_tunnel
             proc, url = await start_quick_tunnel(args.port)
             if url:
@@ -163,8 +192,11 @@ def main(argv: list[str] | None = None) -> None:
 
     s = sub.add_parser("set-password", help="set the owner login password for the dashboard")
     s.add_argument("password")
-    s.set_defaults(fn=lambda a: (__import__("bizops.web.auth", fromlist=["set_password"]).set_password(
-        _core(a).settings.home / ".env", a.password), print("password set")))
+    s.set_defaults(fn=lambda a: (lambda c: (__import__("bizops.web.auth", fromlist=["set_password"]).set_password(
+        c.settings.home / ".env", a.password, db=c.db), print("password set; all sessions logged out")))(_core(a)))
+
+    s = sub.add_parser("init-secret", help="write a random BIZOPS_SECRET (the signing key) to .env if there is none")
+    s.set_defaults(fn=cmd_init_secret)
 
     s = sub.add_parser("seed", help="create the platform org and the demo company")
     s.add_argument("--dry-run", action="store_true")

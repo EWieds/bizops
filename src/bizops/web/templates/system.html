@@ -25,6 +25,16 @@
 <div class="text-xs space-y-1"><div>Running now: <b>{{ running|length }}</b> / {{ limits.max_concurrent_runs }}</div>
 <div>Last maintenance tick: {{ last_tick|ago }}</div><div>Per run: {{ limits.max_turns }} turns, {{ limits.max_tokens_per_run }} tokens</div></div>
 {% endcall %}
+{% call card("Login sessions") %}
+<div class="text-xs space-y-1">
+{% for s in sessions %}<div class="border-t py-1 flex gap-2 items-center"><div class="flex-1">{{ s.ip or '?' }} · {{ (s.user_agent or '')[:40] }}<div class="text-slate-500">last seen {{ s.last_seen_at|ago }}{% if s.id == current_session %} · <b>this browser</b>{% endif %}</div></div>
+<form method="post" action="/sessions/{{ s.id }}/revoke"><button class="px-2 py-0.5 rounded border">revoke</button></form></div>
+{% else %}<div class="text-slate-500">{{ 'No active sessions.' if has_password else 'No password set: the dashboard only answers this computer.' }}</div>{% endfor %}
+{% if sessions %}<div class="flex gap-2 pt-1"><form method="post" action="/sessions/revoke-others"><button class="px-2 py-1 rounded border">Log out all other sessions</button></form>
+<form method="post" action="/logout"><button class="px-2 py-1 rounded bg-slate-800 text-white">Log out</button></form></div>{% endif %}
+<div class="text-slate-500">5 wrong passwords from one address lock it out for 15 minutes. Changing the password logs out every session.</div>
+</div>
+{% endcall %}
 {% call card("Guardrails") %}
 <div class="text-xs space-y-1">
 <div>Platform caps: {{ caps.monthly|usd }}/month, {{ caps.daily|usd }}/day, ceiling {{ caps.ceiling|usd }}</div>

@@ -153,6 +153,23 @@ async def lead_thread(ctx: Ctx, args: dict) -> dict:
 
 # ---------------------------------------------------------------- email
 
+def _retry_limit(ctx: Ctx, lead: dict, kind: str) -> None:
+    """Stop endless rewrites: after N drafts to one recipient fail the quality bar within a day, refuse
+    before paying for another score and tell the agent to move on and get help."""
+    from ..util import iso, now
+    from datetime import timedelta
+    limit = int(ctx.settings.policy.get("quality", {}).get("max_rejections_per_recipient", 3))
+    since = iso(now() - timedelta(hours=24))
+    n = int(ctx.db.scalar("SELECT COUNT(*) AS n FROM events a JOIN events b ON b.call_id = a.call_id AND b.phase = 'before' "
+                          "WHERE a.action = 'send_email' AND a.phase = 'after' AND a.outcome = 'refused' AND a.ts >= ? "
+                          "AND a.result_json LIKE '%quality.%' AND b.args_json LIKE ?", (since, f"%{lead['id']}%")) or 0)
+    if n >= limit:
+        raise PolicyRefusal("quality.retry_limit",
+                            f"{n} drafts to {lead['company']} failed the quality bar in the last 24h. Stop rewriting this "
+                            "one: move on to other leads, and ask your manager (or marketing) to review the approach that "
+                            "keeps failing before trying this lead again.")
+
+
 @tool("send_email", grant="email", action_class="email_b2b", timeout_s=60, ref_type="email",
       description="Email a lead or customer. Sender identity, postal address and an unsubscribe link are added "
                   "automatically. Limits: daily cap per business, follow-up gap, max cold touches, suppression list. "
@@ -167,6 +184,7 @@ async def send_email(ctx: Ctx, args: dict) -> ToolOutput:
     kind = args.get("kind") or "outreach"
     if kind == "customer" and not ctx.db.one("SELECT 1 AS x FROM customers WHERE lead_id = ?", (lead["id"],)):
         kind = "reply" if lead["last_reply_at"] else "outreach"
+    _retry_limit(ctx, lead, kind)
     from ..decide import quality_gate
     await quality_gate(ctx.core, org_id=ctx.agent["org_id"], kind=kind, text=f"Subject: {args['subject']}\n\n{args['body']}",
                        context={"recipient": {k: lead[k] for k in ("company", "industry", "city", "contact_name")}})
@@ -270,8 +288,8 @@ async def share_file(ctx: Ctx, args: dict) -> dict:
                      (args["artifact_id"], args["artifact_id"], ctx.agent["org_id"]))
     if not row:
         raise PolicyRefusal("files.missing", "no such file in your org")
-    token = business.unsub_token(ctx.settings, row["id"])
-    return {"url": f"{business.public_base(ctx.db, ctx.settings)}/f/{row['id']}/{token.split('.')[1]}", "name": row["name"]}
+    return {"url": f"{business.public_base(ctx.db, ctx.settings)}/f/{row['id']}/{business.file_sig(row['id'])}",
+            "name": row["name"]}
 
 
 # ---------------------------------------------------------------- voice agents (one product type)
@@ -321,6 +339,10 @@ async def test_voice_agent(ctx: Ctx, args: dict) -> ToolOutput:
     return ToolOutput({"agent_says": answer}, cost_micros=response_cost(ctx.settings, resp) if resp else 0)
 
 
+def voice_model(settings) -> str:
+    return settings.models.get("voice_model") or settings.models["tiers"]["worker"]
+
+
 async def voice_reply(core, cfg: dict, history: list[dict]) -> tuple[str, object]:
     """One receptionist turn, shared by test_voice_agent and the public web demo."""
     from ..connectors.voice import receptionist_prompt
@@ -328,7 +350,7 @@ async def voice_reply(core, cfg: dict, history: list[dict]) -> tuple[str, object
         last = history[-1]["content"]
         return (f"Thanks for calling {cfg.get('business_name')}! Our hours are {cfg.get('hours', 'listed on our site')}. "
                 f"I can take your name and number for: {clip(last, 80)}"), None
-    model = core.settings.models.get("voice_model") or core.settings.models["tiers"]["worker"]
+    model = voice_model(core.settings)
     transcript = "\n".join(f"{'Caller' if m['role'] == 'user' else 'You'}: {m['content']}" for m in history[-12:])
     data, resp = await core.llm.structured(model=model, system=receptionist_prompt(cfg),
                                            prompt=f"Phone call so far:\n{transcript}\n\nReply as the receptionist (1-3 short sentences).",
