@@ -56,8 +56,9 @@ class SandboxEmail:
 def smtp_login(smtp: smtplib.SMTP, user: str, password: str) -> None:
     """Log in with AUTH LOGIN when offered. Gmail drops some cloud servers' connections on AUTH PLAIN (smtplib's
     default) instead of answering, while AUTH LOGIN works and gives proper errors."""
-    smtp.ehlo_or_helo_if_needed()
-    if "login" in (smtp.esmtp_features.get("auth") or "").lower().split():
+    if hasattr(smtp, "ehlo_or_helo_if_needed"):
+        smtp.ehlo_or_helo_if_needed()
+    if "login" in (getattr(smtp, "esmtp_features", {}).get("auth") or "").lower().split():
         smtp.user, smtp.password = user, password
         smtp.auth("LOGIN", smtp.auth_login, initial_response_ok=False)
     else:
