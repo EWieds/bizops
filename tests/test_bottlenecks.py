@@ -258,3 +258,18 @@ def test_email_settings_are_cleaned_and_both_ports_tried(monkeypatch):
     monkeypatch.setattr(connect, "_smtp_login", bad_login)
     with pytest.raises(RuntimeError, match="failed at login"):
         connect.test_smtp({**env, "SMTP_PORT": "587"})
+
+
+async def test_owner_can_choose_the_claude_token_over_an_api_key(settings, monkeypatch):
+    from bizops import core as core_mod
+    from bizops.llm import claude_cli
+    settings.dry_run = False
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-x")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    monkeypatch.setattr(claude_cli, "find_claude", lambda: "/usr/bin/claude")
+    assert core_mod.detect_backend(settings)[0] == "api"  # automatic: the API key wins
+    monkeypatch.setenv("MODEL_BACKEND", "claude_token")
+    assert core_mod.detect_backend(settings)[0] == "claude_cli"
+    assert "ANTHROPIC_API_KEY" not in claude_cli.cli_env()  # so the CLI bills the subscription, not the key
+    with pytest.raises(RuntimeError, match="browser session key"):
+        await claude_cli.test_token("sk-ant-sid02-abc")

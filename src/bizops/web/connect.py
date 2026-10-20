@@ -24,7 +24,8 @@ FIELDS = {
               "SENDER_NAME", "SENDER_ADDRESS"],
     "voice": ["VAPI_API_KEY"],
     "cards": ["PRIVACY_API_KEY", "PRIVACY_SANDBOX", "CARDHOLDER_NAME", "CARDHOLDER_ZIP"],
-    "models": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "BRAVE_API_KEY", "TYPESAFE_API_KEY", "YOUTUBE_API_KEY"],
+    "models": ["MODEL_BACKEND", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "BRAVE_API_KEY", "TYPESAFE_API_KEY",
+               "YOUTUBE_API_KEY"],
     "site": ["PUBLIC_BASE_URL"],
 }
 SECRET = {"YOUTUBE_API_KEY", "PRIVACY_API_KEY", "TYPESAFE_API_KEY", "STRIPE_SECRET_KEY", "SMTP_PASSWORD", "VAPI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
@@ -145,6 +146,11 @@ def register_connect(app: FastAPI, core, page) -> None:
                     updates["SMTP_PORT"] = merged["SMTP_PORT"]
             elif group == "voice" and merged.get("VAPI_API_KEY"):
                 result = await test_vapi(merged["VAPI_API_KEY"])
+            elif group == "models" and (updates.get("CLAUDE_CODE_OAUTH_TOKEN") or merged.get("MODEL_BACKEND") == "claude_token"):
+                from ..llm.claude_cli import test_token
+                if not merged.get("CLAUDE_CODE_OAUTH_TOKEN"):
+                    raise RuntimeError("paste a Claude token first (from `claude setup-token`)")
+                result = await test_token(merged["CLAUDE_CODE_OAUTH_TOKEN"])
             elif group == "cards" and merged.get("PRIVACY_API_KEY"):
                 from ..cards import test_privacy
                 result = await test_privacy(merged["PRIVACY_API_KEY"],

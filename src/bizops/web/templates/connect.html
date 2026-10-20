@@ -39,9 +39,11 @@
 <form method="post" action="/connect/password" class="mt-3"><label class="block text-xs mb-2">Owner password {{ '(set)' if has_password else '(not set: the dashboard only works from this machine)' }}
 <input name="password" type="password" class="mt-0.5 w-full border rounded p-1.5 text-sm"></label><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Set password</button></form>
 {% endcall %}
-{% call card("Model access (automatic)") %}
+{% call card("Model access") %}
 <p class="text-xs text-slate-600 mb-2">Detected: <b>{{ backend_label }}</b> ({{ backend_why }}). On a server, paste a long-lived Claude token (run <code>claude setup-token</code> on your computer) or an Anthropic API key. For heavy 24/7 use an API key is the supported route; a subscription token has usage limits.</p>
-<form method="post" action="/connect/models" class="grid grid-cols-2 gap-x-3">{{ field('CLAUDE_CODE_OAUTH_TOKEN', 'Claude token (from claude setup-token)') }}{{ field('ANTHROPIC_API_KEY', 'or Anthropic API key') }}
+<form method="post" action="/connect/models" class="grid grid-cols-2 gap-x-3">
+<label class="block text-xs mb-2 col-span-2">Use<select name="MODEL_BACKEND" class="mt-0.5 w-full border rounded p-1.5 text-sm">{% for v, l in (('auto', 'Automatic (API key if set, else the Claude token)'), ('claude_token', 'Claude token (your subscription)'), ('api_key', 'Anthropic API key')) %}<option value="{{ v }}" {{ 'selected' if (values.MODEL_BACKEND or 'auto') == v }}>{{ l }}</option>{% endfor %}</select></label>
+{{ field('CLAUDE_CODE_OAUTH_TOKEN', 'Claude token (from claude setup-token, starts with sk-ant-oat01-)') }}{{ field('ANTHROPIC_API_KEY', 'or Anthropic API key') }}
 {{ field('BRAVE_API_KEY', 'Brave Search key (optional)') }}{{ field('TYPESAFE_API_KEY', 'Jev / TypeSafe API key (optional: cheaper, faster)') }}
 <div class="col-span-2">{{ field('YOUTUBE_API_KEY', 'YouTube Data API key (optional, free: full channel video lists with view counts for the Ideas page)', 'console.cloud.google.com -> APIs & Services -> enable "YouTube Data API v3" -> Credentials -> Create API key') }}</div>
 <div><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Save</button></div></form>

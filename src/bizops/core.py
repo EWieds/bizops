@@ -29,6 +29,13 @@ def detect_backend(settings: Settings) -> tuple[str, str]:
     choice = str(settings.models.get("backend", "auto")).lower()
     if choice in ("api", "claude_cli", "dry_run"):
         return choice, "set in config/models.yaml"
+    pref = (settings.secret("MODEL_BACKEND") or "auto").lower()  # the owner's choice on the Connect page
+    if pref == "claude_token" and settings.secret("CLAUDE_CODE_OAUTH_TOKEN"):
+        from .llm.claude_cli import find_claude
+        if find_claude():
+            return "claude_cli", "Claude token (your subscription), chosen on the Connect page"
+    if pref == "api_key" and settings.secret("ANTHROPIC_API_KEY"):
+        return "api", "Anthropic API key, chosen on the Connect page"
     if settings.secret("ANTHROPIC_API_KEY") or settings.secret("ANTHROPIC_AUTH_TOKEN"):
         return "api", "ANTHROPIC_API_KEY found"
     if (Path.home() / ".config" / "anthropic").is_dir() and shutil.which("ant"):

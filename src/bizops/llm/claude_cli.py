@@ -82,6 +82,42 @@ def _reset_in(text: str) -> float:
     return (at - now).total_seconds() + 60
 
 
+def cli_env() -> dict[str, str]:
+    """Environment for the claude CLI. With a Claude token present, API keys are left out: the CLI would
+    otherwise bill the API key instead of the subscription the owner chose."""
+    drop = {"CLAUDECODE"}
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        drop |= {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+    return {k: v for k, v in os.environ.items() if k not in drop}
+
+
+async def test_token(token: str) -> str:
+    """One tiny real call with the token, so a bad token is caught on the Connect page, not by idle agents."""
+    if token.startswith("sk-ant-sid"):
+        raise RuntimeError("that's a claude.ai browser session key, not a Claude Code token. On your computer run "
+                           "`claude setup-token` and paste the token it prints (it starts with sk-ant-oat01-). "
+                           "Then log out of claude.ai once to invalidate the session key you pasted.")
+    if not token.startswith("sk-ant-oat"):
+        raise RuntimeError("a Claude token from `claude setup-token` starts with sk-ant-oat01-")
+    binary = find_claude()
+    if not binary:
+        raise RuntimeError("the claude CLI isn't installed on this server")
+    env = {**cli_env(), "CLAUDE_CODE_OAUTH_TOKEN": token}
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    proc = await asyncio.create_subprocess_exec(binary, "-p", "Reply with just: ok", "--output-format", "json",
+                                                "--no-session-persistence", stdout=asyncio.subprocess.PIPE,
+                                                stderr=asyncio.subprocess.PIPE, env=env)
+    out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+    try:
+        data = json.loads(out or b"{}")
+    except ValueError:
+        data = {}
+    if data.get("is_error") or proc.returncode:
+        raise RuntimeError(f"Claude rejected the token: {str(data.get('result') or err.decode()[:200]).strip()}")
+    return "Claude token works."
+
+
 def find_claude() -> str | None:
     return shutil.which("claude") or next(
         (str(p) for p in (Path.home() / ".claude/local/claude", Path("/usr/local/bin/claude")) if p.exists()), None)
@@ -120,7 +156,7 @@ class ClaudeCLIClient:
                 "--max-budget-usd", str(self.per_call_budget)]
         if allowed:
             args += ["--allowedTools", allowed]
-        env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE",)}
+        env = cli_env()
         proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                                                     stderr=asyncio.subprocess.PIPE, cwd=self.workdir, env=env)
         try:
