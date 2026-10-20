@@ -706,7 +706,8 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         analyst = db.one("SELECT * FROM agents WHERE role = 'venture_analyst' AND status = 'active' ORDER BY created_at LIMIT 1")
         from ..ideas import PARAM_CHOICES, PARAM_LIMITS, PARAM_TEXT, get_params
         sources = db.all("SELECT s.*, (SELECT COUNT(*) FROM idea_source_items i WHERE i.source_id = s.id AND i.status = 'sent') "
-                         "AS sent FROM idea_sources s ORDER BY s.created_at")
+                         "AS sent, (SELECT COUNT(*) FROM idea_source_items i WHERE i.source_id = s.id AND i.status = 'new') "
+                         "AS queued FROM idea_sources s ORDER BY s.created_at")
         return page(request, "ideas.html", proposals=rows, weights=SCORE_WEIGHTS, analyst=analyst, sources=sources,
                     params=get_params(db), param_text=PARAM_TEXT, param_limits=PARAM_LIMITS, param_choices=PARAM_CHOICES,
                     pceo=org_ceo(db, root["id"]) if root else None, venture=settings.policy.get("venture", {}),
@@ -743,10 +744,11 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         return RedirectResponse("/ideas?saved=1", status_code=303)
 
     @app.post("/ideas/sources")
-    async def ideas_source_add(request: Request, url: str = Form(...)):
+    async def ideas_source_add(request: Request, url: str = Form(...), order_by: str = Form("views"),
+                               max_videos: int = Form(0)):
         from ..idea_sources import add_channel
         try:
-            src = await add_channel(core, url)
+            src = await add_channel(core, url, order_by=order_by, max_videos=max_videos)
         except PolicyRefusal as e:
             return RedirectResponse(f"/ideas?source_err={quote(e.detail)}", status_code=303)
         except Exception as e:

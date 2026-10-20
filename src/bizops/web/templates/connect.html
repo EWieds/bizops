@@ -43,6 +43,7 @@
 <p class="text-xs text-slate-600 mb-2">Detected: <b>{{ backend_label }}</b> ({{ backend_why }}). On a server, paste a long-lived Claude token (run <code>claude setup-token</code> on your computer) or an Anthropic API key. For heavy 24/7 use an API key is the supported route; a subscription token has usage limits.</p>
 <form method="post" action="/connect/models" class="grid grid-cols-2 gap-x-3">{{ field('CLAUDE_CODE_OAUTH_TOKEN', 'Claude token (from claude setup-token)') }}{{ field('ANTHROPIC_API_KEY', 'or Anthropic API key') }}
 {{ field('BRAVE_API_KEY', 'Brave Search key (optional)') }}{{ field('TYPESAFE_API_KEY', 'Jev / TypeSafe API key (optional: cheaper, faster)') }}
+<div class="col-span-2">{{ field('YOUTUBE_API_KEY', 'YouTube Data API key (optional, free: full channel video lists with view counts for the Ideas page)', 'console.cloud.google.com -> APIs & Services -> enable "YouTube Data API v3" -> Credentials -> Create API key') }}</div>
 <div><button class="px-3 py-1.5 rounded-md bg-slate-900 text-white text-xs">Save</button></div></form>
 {% endcall %}
 </div>

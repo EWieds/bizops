@@ -38,45 +38,70 @@ def test_rule_is_tunable_in_policy(settings):
     assert launch_bar(settings, {"total_score": 3}, review(m6=1000, legal_risk=4))["bar"] == 2.0
 
 
-FEED_XML = """<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015">
-<title>Side Hustle Lab</title>
-<entry><yt:videoId>{a}</yt:videoId><title>Video A</title><published>2026-10-18T10:00:00+00:00</published></entry>
-<entry><yt:videoId>BBBBBBBBBBB</yt:videoId><title>Video B</title><published>2026-10-10T10:00:00+00:00</published></entry>
-<entry><yt:videoId>CCCCCCCCCCC</yt:videoId><title>Video C</title><published>2026-10-01T10:00:00+00:00</published></entry>
-</feed>"""
+VIDEOS = [  # the channel's own order: newest first
+    {"video_id": "AAAAAAAAAAA", "title": "Newest, few views", "view_count": 900, "duration_s": 900},
+    {"video_id": "BBBBBBBBBBB", "title": "Big hit", "view_count": 133000, "duration_s": 2600},
+    {"video_id": "CCCCCCCCCCC", "title": "A short", "view_count": 500000, "duration_s": 40},
+    {"video_id": "DDDDDDDDDDD", "title": "Solid", "view_count": 62000, "duration_s": 2600},
+    {"video_id": "EEEEEEEEEEE", "title": "Views unknown", "view_count": None, "duration_s": None},
+]
 
 
 @pytest.fixture
 def fake_youtube(monkeypatch):
-    state = {"latest": "AAAAAAAAAAA"}
+    state = {"videos": list(VIDEOS), "transcribed": []}
 
-    async def get(url):
-        if "feeds/videos.xml" in url:
-            return FEED_XML.format(a=state["latest"])
+    async def get(url, params=None):
         return '<html><meta itemprop="identifier" content="UC1234567890123456789012"></html>'
 
+    async def listing(core, channel_id):
+        return "Side Hustle Lab", list(state["videos"]), "test"
+
     async def yt(core, vid):
+        state["transcribed"].append(vid)
         return {"video_id": vid, "url": f"https://www.youtube.com/watch?v={vid}", "title": f"Video {vid[:1]}",
                 "transcript": "how I started a lawn care lead business " * 80, "minutes": 12}
 
     monkeypatch.setattr(idea_sources, "_http_get", get)
+    monkeypatch.setattr(idea_sources, "list_videos", listing)
     monkeypatch.setattr(media, "youtube", yt)
     return state
 
 
-async def test_channel_videos_become_analyst_tasks(core, org, fake_youtube):
-    core.settings.policy["venture"]["youtube"] = {"backfill_videos": 2}
+def analyst_tasks(core):
+    return core.db.all("SELECT t.* FROM tasks t JOIN agents a ON a.id = t.assignee_id WHERE a.role = 'venture_analyst' "
+                       "AND t.title LIKE 'Ideas from YouTube%' ORDER BY t.created_at")
+
+
+async def test_whole_channel_most_viewed_first_new_uploads_jump_the_queue(core, org, fake_youtube):
+    core.settings.policy["venture"]["youtube"] = {"max_videos_per_check": 2}
     src = await idea_sources.add_channel(core, "https://www.youtube.com/@sidehustlelab")
     assert src["channel_id"] == "UC1234567890123456789012" and src["title"] == "Side Hustle Lab"
-    assert await idea_sources.poll(core) == 2  # the latest two; the older one is skipped
-    tasks = core.db.all("SELECT t.* FROM tasks t JOIN agents a ON a.id = t.assignee_id WHERE a.role = 'venture_analyst' "
-                        "AND t.title LIKE 'Ideas from YouTube%'")
-    assert len(tasks) == 2 and "read_artifact art_" in tasks[0]["description"]
+    assert src["total_videos"] == 5
+    assert await idea_sources.poll(core) == 2
+    assert fake_youtube["transcribed"] == ["BBBBBBBBBBB", "DDDDDDDDDDD"]  # most viewed; the 40s short is skipped
+    assert "133,000 views" in analyst_tasks(core)[0]["description"]
     assert await idea_sources.poll(core) == 0  # throttled
-    fake_youtube["latest"] = "DDDDDDDDDDD"  # a new upload
-    assert await idea_sources.poll(core, force=True) == 1
-    again = await idea_sources.add_channel(core, "@sidehustlelab")
-    assert again["id"] == src["id"]
+    fake_youtube["videos"].insert(0, {"video_id": "FFFFFFFFFFF", "title": "Brand new", "view_count": 10, "duration_s": 600})
+    assert await idea_sources.poll(core, force=True) == 2
+    assert fake_youtube["transcribed"][2:] == ["FFFFFFFFFFF", "AAAAAAAAAAA"]  # the new upload first, then the backlog
+    assert await idea_sources.poll(core, force=True) == 1  # finally the one without a view count
+    assert await idea_sources.poll(core, force=True) == 0  # the whole channel is done
+    again = await idea_sources.add_channel(core, "@sidehustlelab", order_by="newest")
+    assert again["id"] == src["id"] and again["order_by"] == "newest"
+
+
+async def test_newest_first_and_top_n(core, org, fake_youtube):
+    core.settings.policy["venture"]["youtube"] = {"max_videos_per_check": 10}
+    await idea_sources.add_channel(core, "@sidehustlelab", order_by="newest", max_videos=2)
+    assert await idea_sources.poll(core) == 2
+    assert fake_youtube["transcribed"] == ["AAAAAAAAAAA", "BBBBBBBBBBB"]
+    assert await idea_sources.poll(core, force=True) == 0  # top 2 only
+
+
+def test_youtube_api_durations():
+    assert idea_sources._iso_duration("PT44M51S") == 2691 and idea_sources._iso_duration("PT1H2M") == 3720
+    assert idea_sources._iso_duration("P1DT1S") == 86401
 
 
 async def test_bad_channel_input_is_refused(core, org):
@@ -88,7 +113,8 @@ def test_ideas_page_adds_and_lists_channels(core, org, fake_youtube):
     from bizops.web.app import create_app
     with TestClient(create_app(core, run_scheduler=False)) as c:
         with_csrf(c)
-        r = c.post("/ideas/sources", data={"url": "@sidehustlelab"}, follow_redirects=False)
+        r = c.post("/ideas/sources", data={"url": "@sidehustlelab", "order_by": "views", "max_videos": "25"},
+                   follow_redirects=False)
         assert r.status_code == 303 and "source_added" in r.headers["location"]
         page = c.get("/ideas").text
-        assert "Side Hustle Lab" in page and "YouTube channels" in page
+        assert "Side Hustle Lab" in page and "most viewed first" in page and "top 25" in page

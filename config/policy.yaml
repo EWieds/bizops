@@ -148,10 +148,11 @@ venture:
   proposals_per_cycle: 3
   auto_launch: true               # the platform CEO may launch strong proposals itself, inside the limits above
   youtube:                        # YouTube channels the owner adds on the Ideas page (idea_sources.py)
-    check_hours: 6                # how often each channel's feed is checked
-    backfill_videos: 3            # when a channel is added, its latest N videos are researched; older ones skipped
-    max_videos_per_check: 3       # per channel per check
-    min_transcript_chars: 1500    # shorter transcripts (shorts) are skipped
+    check_hours: 3                # how often videos are sent to the analyst
+    max_videos_per_check: 4       # per channel per check (new uploads first, then the backlog in the channel's order)
+    list_every_hours: 24          # how often each channel's full video list is refreshed (finds new uploads)
+    min_duration_s: 120           # shorter videos are skipped
+    min_transcript_chars: 1500
   launch_rule:                    # the bar the RED TEAM's weighted score (out of 5) must clear, set per proposal
     base: 3.4                     # from its score breakdown (ideas.launch_bar), clamped to [min, max]
     min: 2.8
