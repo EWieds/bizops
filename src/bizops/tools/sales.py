@@ -153,6 +153,23 @@ async def lead_thread(ctx: Ctx, args: dict) -> dict:
 
 # ---------------------------------------------------------------- email
 
+def _retry_limit(ctx: Ctx, lead: dict, kind: str) -> None:
+    """Stop endless rewrites: after N drafts to one recipient fail the quality bar within a day, refuse
+    before paying for another score and tell the agent to move on and get help."""
+    from ..util import iso, now
+    from datetime import timedelta
+    limit = int(ctx.settings.policy.get("quality", {}).get("max_rejections_per_recipient", 3))
+    since = iso(now() - timedelta(hours=24))
+    n = int(ctx.db.scalar("SELECT COUNT(*) AS n FROM events a JOIN events b ON b.call_id = a.call_id AND b.phase = 'before' "
+                          "WHERE a.action = 'send_email' AND a.phase = 'after' AND a.outcome = 'refused' AND a.ts >= ? "
+                          "AND a.result_json LIKE '%quality.%' AND b.args_json LIKE ?", (since, f"%{lead['id']}%")) or 0)
+    if n >= limit:
+        raise PolicyRefusal("quality.retry_limit",
+                            f"{n} drafts to {lead['company']} failed the quality bar in the last 24h. Stop rewriting this "
+                            "one: move on to other leads, and ask your manager (or marketing) to review the approach that "
+                            "keeps failing before trying this lead again.")
+
+
 @tool("send_email", grant="email", action_class="email_b2b", timeout_s=60, ref_type="email",
       description="Email a lead or customer. Sender identity, postal address and an unsubscribe link are added "
                   "automatically. Limits: daily cap per business, follow-up gap, max cold touches, suppression list. "
@@ -167,6 +184,7 @@ async def send_email(ctx: Ctx, args: dict) -> ToolOutput:
     kind = args.get("kind") or "outreach"
     if kind == "customer" and not ctx.db.one("SELECT 1 AS x FROM customers WHERE lead_id = ?", (lead["id"],)):
         kind = "reply" if lead["last_reply_at"] else "outreach"
+    _retry_limit(ctx, lead, kind)
     from ..decide import quality_gate
     await quality_gate(ctx.core, org_id=ctx.agent["org_id"], kind=kind, text=f"Subject: {args['subject']}\n\n{args['body']}",
                        context={"recipient": {k: lead[k] for k in ("company", "industry", "city", "contact_name")}})

@@ -137,6 +137,8 @@ quality:
   page_min: 2.5
   deliverable_min: 0.35    # "done" must actually meet the task's deliverable
   min_confidence: 0.5
+  jev_margin: 0.2          # Jev scores are expected values (a "good" email averages ~2.8-3.0): bar minus this
+  max_rejections_per_recipient: 3   # then stop rewriting that email for 24h and get help instead
 
 # Cheap, fast routing with Jev (or the cheapest Claude tier when Jev isn't configured).
 routing:
