@@ -53,6 +53,17 @@ class SandboxEmail:
         return []
 
 
+def smtp_login(smtp: smtplib.SMTP, user: str, password: str) -> None:
+    """Log in with AUTH LOGIN when offered. Gmail drops some cloud servers' connections on AUTH PLAIN (smtplib's
+    default) instead of answering, while AUTH LOGIN works and gives proper errors."""
+    smtp.ehlo_or_helo_if_needed()
+    if "login" in (smtp.esmtp_features.get("auth") or "").lower().split():
+        smtp.user, smtp.password = user, password
+        smtp.auth("LOGIN", smtp.auth_login, initial_response_ok=False)
+    else:
+        smtp.login(user, password)
+
+
 class SMTPEmail:
     name = "smtp"
     live = True
@@ -68,7 +79,7 @@ class SMTPEmail:
     def _send_sync(self, msg: EmailMessage) -> None:
         if self.port == 465:
             with smtplib.SMTP_SSL(self.host, self.port, timeout=30) as smtp:
-                smtp.login(self.user, self.password)
+                smtp_login(smtp, self.user, self.password)
                 smtp.send_message(msg)
         else:
             with smtplib.SMTP(self.host, self.port, timeout=30) as smtp:
@@ -77,7 +88,7 @@ class SMTPEmail:
                     smtp.starttls()
                     smtp.ehlo()
                 if self.user:
-                    smtp.login(self.user, self.password)
+                    smtp_login(smtp, self.user, self.password)
                 smtp.send_message(msg)
 
     async def send(self, *, from_addr: str, to_addr: str, subject: str, body: str, reply_to: str | None = None,

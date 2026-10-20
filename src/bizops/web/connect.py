@@ -14,6 +14,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..config import write_env
+from ..connectors.email import smtp_login
 from ..engine import set_setting
 from .auth import set_password
 
@@ -66,7 +67,7 @@ def _smtp_login(host: str, port: int, user: str, password: str) -> None:
                 s.starttls()
                 s.ehlo()
         step = "login"
-        s.login(user, password)
+        smtp_login(s, user, password)
         s.quit()
     except Exception as e:
         raise RuntimeError(f"SMTP {host}:{port} failed at {step}: {type(e).__name__}: {e}") from e
