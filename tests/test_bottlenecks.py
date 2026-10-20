@@ -292,3 +292,11 @@ def test_pasted_tokens_lose_line_wrap_spaces(core, org, monkeypatch):
         c.post("/connect/models", data={"MODEL_BACKEND": "claude_token",
                                         "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-abc  def\nghi"}, follow_redirects=False)
     assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-abcdefghi"
+
+
+async def test_spend_caps_can_be_turned_off(core, org):
+    core.settings.policy["budgets"]["spend_caps"] = False
+    core.db.execute("UPDATE orgs SET monthly_cap_micros = 1")
+    core.settings.policy["platform"]["daily_cap_usd"] = 0
+    r = await invoke(Ctx(core=core, agent=org["researcher"]), "web_search", {"query": "lawn care"})
+    assert r.ok, r.content

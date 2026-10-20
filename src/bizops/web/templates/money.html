@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% from "_macros.html" import card %}
 {% block body %}
 {% call card("Caps") %}
-<div>Platform: {{ caps.month|usd }} of {{ caps.monthly|usd }} this month · {{ caps.day|usd }} of {{ caps.daily|usd }} today · hard ceiling {{ caps.ceiling|usd }}</div>
+{% if caps.on %}<div>Platform: {{ caps.month|usd }} of {{ caps.monthly|usd }} this month · {{ caps.day|usd }} of {{ caps.daily|usd }} today · hard ceiling {{ caps.ceiling|usd }}</div>{% else %}<div>Spending caps are <b>off</b> (budgets.spend_caps in config/policy.yaml): {{ caps.month|usd }} this month · {{ caps.day|usd }} today. Wallets, purchase and payment limits still apply.</div>{% endif %}
 <div class="text-xs text-slate-500">Payment limits: {{ '$%s'|format(money.per_payment_max_usd) }} per payment, {{ '$%s'|format(money.daily_payments_max_usd_per_org) }} per org per day. Change them in config/policy.yaml.</div>
 {% endcall %}
 {% call card("Purchases", '<span class="pill ' ~ ('o-ok' if cards == 'privacy' else 'o-muted') ~ '">cards: ' ~ cards ~ '</span>') %}

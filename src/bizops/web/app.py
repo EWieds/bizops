@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Red
 from fastapi.templating import Jinja2Templates
 
 from .. import business, ledger
-from ..budget import platform_caps
+from ..budget import platform_caps, spend_caps_enforced
 from ..core import Core
 from ..db import Database
 from ..engine import (PolicyRefusal, create_org_from_template, get_agent, get_org, get_setting, human_message,
@@ -609,7 +609,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         return page(request, "money.html", orgs=orgs, payees=payees, entries=entries, money=settings.policy["money"],
                     cap=waterfall_view(db), holdback=settings.policy.get("sales", {}).get("revenue_holdback_days", 30),
                     buys=buys, purchase_limits=settings.policy.get("purchases", {}), cards=core.cards.name,
-                    caps={"monthly": monthly, "daily": daily, "ceiling": ceiling,
+                    caps={"monthly": monthly, "daily": daily, "ceiling": ceiling, "on": spend_caps_enforced(settings),
                           "month": ledger.spent(db, since=ms), "day": ledger.spent(db, since=day_start())})
 
     @app.post("/money/deposit")

@@ -84,6 +84,9 @@ def stalled_tasks(db: Database, settings: Settings) -> int:
 
 
 def budget_alerts(db: Database, settings: Settings) -> int:
+    from .budget import spend_caps_enforced
+    if not spend_caps_enforced(settings):
+        return 0
     pct = float(_cfg(settings).get("budget_alert_pct", 80)) / 100
     n = 0
     for org in db.all("SELECT * FROM orgs WHERE status IN ('active','trial') AND monthly_cap_micros > 0"):

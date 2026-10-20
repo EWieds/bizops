@@ -199,8 +199,11 @@ def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str,
     else:
         org_spent = ledger.spent(db, since=month_start(), org_id=agent["org_id"])
         org = db.one("SELECT monthly_cap_micros FROM orgs WHERE id = ?", (agent["org_id"],)) or {"monthly_cap_micros": 0}
+        from .budget import spend_caps_enforced
+        cap = (f"of its {fmt_usd(org['monthly_cap_micros'])} monthly cap" if spend_caps_enforced(core.settings)
+               else "(no spending cap)")
         lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} this month (no personal cap); your org has spent "
-                     f"{fmt_usd(org_spent)} of its {fmt_usd(org['monthly_cap_micros'])} monthly cap. Spend where it pays.")
+                     f"{fmt_usd(org_spent)} {cap}. Spend where it pays.")
     if "money" in g:
         lines.append(f"- org wallet: {fmt_usd(ledger.wallet_balance(db, agent['org_id']))}")
         for p in payees:

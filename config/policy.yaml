@@ -39,6 +39,8 @@ hard_stops:
   browser_assist: "A website step only a person can do: a CAPTCHA, a code sent to the owner's phone, an ID or selfie check"
 
 budgets:
+  spend_caps: false           # the platform daily/monthly caps above and each business's monthly cap. false: model use
+                              # and tool spend are unlimited (wallets, purchase and payment limits still bound money)
   agent_budgets: false        # per-agent monthly budgets. false: agents are limited only by their org's monthly cap
                               # and the platform caps above (no agent stalls while its business still has budget)
 
