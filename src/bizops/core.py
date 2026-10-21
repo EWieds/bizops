@@ -97,7 +97,7 @@ def upgrade_grants(db: Database) -> int:
 # Roles whose prompt changed after agents of that role were created: (version, role). Their base prompt is
 # replaced once; any per-org focus they were given is kept.
 PROMPT_UPGRADES = [("0009", "red_team"), ("0009", "venture_analyst"), ("0009", "ceo"), ("0009", "marketer"),
-                   ("0009", "platform_cfo")]
+                   ("0009", "platform_cfo"), ("0010", "platform_ceo")]
 
 
 def upgrade_prompts(db: Database, settings) -> int:
