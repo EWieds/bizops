@@ -310,8 +310,15 @@ async def model_call(ctx: Ctx, *, model: str, system: str, messages: list[dict],
                                            max_tokens=max_tokens, effort=effort)
     except LLMRateLimited as e:
         from .engine import set_setting
+        from .llm.base import LLMOutOfCredit
         from .util import iso_in
         set_setting(db, "llm_paused_until", iso_in(e.retry_after_s))
+        if isinstance(e, LLMOutOfCredit):
+            from .business import file_owner_item
+            file_owner_item(db, ctx.agent["org_id"], "model_credits",
+                            "The Anthropic API account is out of credit, so every agent is paused (they retry every 15 "
+                            "minutes and resume on their own). Top up at console.anthropic.com -> Plans & Billing, and "
+                            "consider turning on auto-reload so this can't stop the businesses again.")
         log_event(db, kind="model", action="llm.call", phase="after", result={"rate_limited": str(e)[:300],
                   "retry_after_s": e.retry_after_s}, outcome="refused", **base)
         raise RunStop("rate_limited", f"model provider limit; all agents pause and resume automatically ({str(e)[:160]})")

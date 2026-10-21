@@ -64,10 +64,21 @@ class AnthropicClient:
             from .base import LLMRateLimited
             retry = float(getattr(e, "response", None) and e.response.headers.get("retry-after") or 60)
             raise LLMRateLimited(f"Anthropic rate limit: {e}", retry_after_s=retry) from e
+        except anthropic.APIStatusError as e:
+            _raise_if_out_of_credit(e)
+            raise
         return self._response(resp, model)
 
     async def structured(self, *, model: str, system: str, prompt: str, schema: dict,
                          max_tokens: int = 1000) -> tuple[dict, LLMResponse]:
+        try:
+            return await self._structured(model=model, system=system, prompt=prompt, schema=schema, max_tokens=max_tokens)
+        except anthropic.APIStatusError as e:
+            _raise_if_out_of_credit(e)
+            raise
+
+    async def _structured(self, *, model: str, system: str, prompt: str, schema: dict,
+                          max_tokens: int = 1000) -> tuple[dict, LLMResponse]:
         resp = await self._create(
             model=model, max_tokens=max_tokens, system=system,
             messages=[{"role": "user", "content": prompt}],
@@ -106,3 +117,9 @@ class AnthropicClient:
                             out.cache_read_tokens) + fee
         return SearchResult(query=query, results=results[:max_results], summary=out.text,
                             cost_micros=cost, provider="anthropic")
+
+
+def _raise_if_out_of_credit(e: Exception) -> None:
+    from .base import LLMOutOfCredit, is_credit_error
+    if getattr(e, "status_code", None) in (400, 402) and is_credit_error(str(e)):
+        raise LLMOutOfCredit(f"Anthropic account is out of credit: {str(e)[:200]}") from e
