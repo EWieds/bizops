@@ -36,6 +36,7 @@ hard_stops:
   new_payee: "Adding a payee to the allowlist"
   connect_email: "Connecting the email account agents send from (one time)"
   connect_billing: "Connecting the umbrella Stripe account (one time)"
+  model_credits: "Topping up the AI model account (Anthropic credits)"
   billing_dispute: "Responding to a chargeback in Stripe (agents never contact a customer who disputed)"
   browser_assist: "A website step only a person can do: a CAPTCHA, a code sent to the owner's phone, an ID or selfie check"
 

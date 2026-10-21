@@ -188,6 +188,10 @@ def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str,
                      "and delete stale notes with note_delete this run.")
     if kb:
         lines.append("Org knowledge base keys: " + ", ".join(k["key"] for k in kb))
+    if agent["role"] in ("platform_ceo", "platform_coo"):
+        from .status import portfolio_text
+        lines.append("\n## Each business today (measured from the logs, UTC day; quote these, not reports)\n"
+                     + portfolio_text(db))
     if agent["role"] in ("venture_analyst", "red_team", "platform_ceo"):
         from .ideas import get_params, params_text
         lines.append("\n## The owner's research parameters (for new business ideas)\n" + params_text(get_params(db)))
@@ -263,6 +267,30 @@ async def route_model(core: Core, agent: dict, model: str, context: str) -> tupl
     return core.settings.models["tiers"][target], f"{own}->{target} ({d.source})"
 
 
+REQUEUE_STATUSES = ("error", "rate_limited", "stopped", "budget")
+OWNER_REPLY_TOOLS = ("reply_human",)
+
+
+async def run_turn(ctx: Ctx, uses: list[dict]) -> list:
+    """Run one model turn's tool calls. Replies to the owner go last, after everything else in the turn has
+    actually happened, and carry an automatic note if any of those actions was refused or failed, so an agent
+    can never tell the owner 'done' about something the system just refused."""
+    order = [i for i, u in enumerate(uses) if u["name"] not in OWNER_REPLY_TOOLS]
+    replies = [i for i, u in enumerate(uses) if u["name"] in OWNER_REPLY_TOOLS]
+    results: list = [None] * len(uses)
+    done = await asyncio.gather(*(invoke(ctx, uses[i]["name"], uses[i].get("input") or {}) for i in order))
+    for i, r in zip(order, done):
+        results[i] = r
+    failed = [(uses[i]["name"], r) for i, r in zip(order, done) if not r.ok]
+    for i in replies:
+        args = dict(uses[i].get("input") or {})
+        if failed and isinstance(args.get("text"), str):
+            notes = "; ".join(f"{name}: {clip(r.content, 220)}" for name, r in failed)
+            args["text"] += f"\n\n(System check: in the same step, this did not go through: {notes})"
+        results[i] = await invoke(ctx, uses[i]["name"], args)
+    return results
+
+
 async def run_agent(core: Core, agent_id: str, reason: str = "manual") -> str | None:
     db, settings = core.db, core.settings
     agent = get_agent(db, agent_id)
@@ -330,7 +358,7 @@ async def run_agent(core: Core, agent_id: str, reason: str = "manual") -> str | 
                     continue
                 summary = resp.text or None
                 break
-            results = await asyncio.gather(*(invoke(ctx, u["name"], u.get("input") or {}) for u in uses))
+            results = await run_turn(ctx, uses)
             cost += sum(r.cost_micros for r in results)
             messages.append({"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": u["id"], "content": r.content or "(empty)",
@@ -344,6 +372,12 @@ async def run_agent(core: Core, agent_id: str, reason: str = "manual") -> str | 
     except Exception as e:
         status, error = "error", f"{type(e).__name__}: {clip(str(e), 500)}"
     finally:
+        if status in REQUEUE_STATUSES and msg_ids and turns == 0:
+            # The run died before the agent could act on its inbox (provider outage, credits, a crash): put the messages
+            # back, so nothing the owner or a colleague sent is silently lost.
+            marks = ",".join("?" for _ in msg_ids)
+            db.execute(f"UPDATE messages SET status = 'unread', read_at = NULL WHERE id IN ({marks})", tuple(msg_ids))
+            db.execute("UPDATE agents SET wake_requested_at = ? WHERE id = ?", (iso(), agent_id))
         with db.tx() as conn:
             conn.execute("UPDATE runs SET status = ?, turns = ?, input_tokens = ?, output_tokens = ?, cost_micros = ?, "
                          "summary = ?, error = ?, ended_at = ? WHERE id = ?",

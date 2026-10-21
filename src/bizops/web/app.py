@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from .. import business, ledger
 from ..budget import platform_caps, spend_caps_enforced
+from ..status import org_today
 from ..core import Core
 from ..db import Database
 from ..engine import (PolicyRefusal, create_org_from_template, get_agent, get_org, get_setting, human_message,
@@ -170,6 +171,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         ms = month_start()
         orgs = db.all("SELECT * FROM orgs ORDER BY parent_org_id IS NOT NULL, created_at")
         for o in orgs:
+            o["today"] = org_today(db, o["id"])
             o["health"], o["health_reasons"] = org_health(db, o)
             o["spent"] = ledger.spent(db, since=ms, org_id=o["id"])
             o["wallet"] = ledger.wallet_balance(db, o["id"])
