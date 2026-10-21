@@ -14,6 +14,7 @@ runs:
   max_turns: 12               # model calls per agent run
   max_tokens_per_run: 250000  # input + output tokens per agent run
   max_concurrent_runs: 4
+  owner_lane_runs: 2          # extra run slots reserved for answering the owner (chat never waits behind routine work)
   default_min_interval_s: 30
 
 # Action classes -> standing authorization. 'allow' means agents act without asking.
