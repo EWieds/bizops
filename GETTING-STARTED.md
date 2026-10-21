@@ -18,12 +18,16 @@ These are tied to your identity by law; agents can't create them for you.
 5. **Stripe** (stripe.com): sign up, verify your identity, add your bank account. Then:
    1. Developers -> API keys -> **Create restricted key**.
    2. Allow **Write** on Products, Prices and Payment Links.
-   3. Allow **Read** on Checkout Sessions and Events.
+   3. Allow **Read** on Events, Balance (the Connect page test reads it) and Checkout Sessions. Leave everything else None.
    4. Copy the key (starts with `rk_live_`).
 6. **Anthropic API key** (console.anthropic.com -> API keys): how the always-on server reaches Claude.
    Set a monthly spend limit there too. (Running a subscription login on a 24/7 server may be against
    Anthropic's terms, so the deploy script asks for an API key.)
-7. **Optional:**
+7. **Privacy.com** (privacy.com, free tier): virtual cards so agents can buy tools and subscriptions
+   themselves. Sign up, verify your identity, link a bank account, then Account -> API -> copy the key.
+   Each purchase your Chief Investment Officer approves gets its own card, locked to that vendor, for
+   exactly the approved amount, and agents can never spend more than you load into a business's wallet.
+8. **Optional:**
    - **Jev / TypeSafe key** (typesafe.ai): cheaper, faster decisions.
    - **Vapi key** (vapi.ai): only if a business sells real phone agents.
 
@@ -60,8 +64,10 @@ Open your dashboard address, log in, click **Connect accounts**, and press **Tes
    - From address: `hello@yourbrand.com`
    - Legal sender name: your name or company
    - Postal address: your PO box
-3. **Model access** (optional): paste your Jev key, or replace the Anthropic API key.
-4. **Password** (optional): change it to one you'll remember.
+3. **Virtual cards**: paste your Privacy.com API key, the name on the card and your billing ZIP.
+   Then on **Money**, load each business's wallet with what its agents may spend.
+4. **Model access** (optional): paste your Jev key, or replace the Anthropic API key.
+5. **Password** (optional): change it to one you'll remember.
 
 ## Part 5: Start a business
 

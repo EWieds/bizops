@@ -12,6 +12,7 @@ import json
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -19,7 +20,8 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Red
 from fastapi.templating import Jinja2Templates
 
 from .. import business, ledger
-from ..budget import platform_caps
+from ..budget import platform_caps, spend_caps_enforced
+from ..status import org_today
 from ..core import Core
 from ..db import Database
 from ..engine import (PolicyRefusal, create_org_from_template, get_agent, get_org, get_setting, human_message,
@@ -169,6 +171,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         ms = month_start()
         orgs = db.all("SELECT * FROM orgs ORDER BY parent_org_id IS NOT NULL, created_at")
         for o in orgs:
+            o["today"] = org_today(db, o["id"])
             o["health"], o["health_reasons"] = org_health(db, o)
             o["spent"] = ledger.spent(db, since=ms, org_id=o["id"])
             o["wallet"] = ledger.wallet_balance(db, o["id"])
@@ -596,6 +599,10 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             o["sandbox_revenue"] = ledger.revenue(db, since="2000", org_id=o["id"], sandbox=True)
             o["cleared"] = business.cleared_revenue_cents(db, org_id=o["id"]) * 10_000
         payees = db.all("SELECT p.*, o.name AS org_name FROM payees p LEFT JOIN orgs o ON o.id = p.org_id ORDER BY p.created_at DESC")
+        buys = db.all("SELECT p.*, o.name AS org_name, a.name AS agent_name, d.name AS decider_name FROM purchases p "
+                      "JOIN orgs o ON o.id = p.org_id LEFT JOIN agents a ON a.id = p.agent_id "
+                      "LEFT JOIN agents d ON d.id = p.decided_by "
+                      "ORDER BY p.status != 'pending', p.created_at DESC LIMIT 100")
         entries = db.all("SELECT l.*, o.name AS org_name, a.name AS agent_name FROM ledger_entries l "
                          "JOIN orgs o ON o.id = l.org_id LEFT JOIN agents a ON a.id = l.agent_id "
                          "WHERE l.kind != 'model_cost' ORDER BY l.ts DESC LIMIT 100")
@@ -603,7 +610,8 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         from ..capital import waterfall_view
         return page(request, "money.html", orgs=orgs, payees=payees, entries=entries, money=settings.policy["money"],
                     cap=waterfall_view(db), holdback=settings.policy.get("sales", {}).get("revenue_holdback_days", 30),
-                    caps={"monthly": monthly, "daily": daily, "ceiling": ceiling,
+                    buys=buys, purchase_limits=settings.policy.get("purchases", {}), cards=core.cards.name,
+                    caps={"monthly": monthly, "daily": daily, "ceiling": ceiling, "on": spend_caps_enforced(settings),
                           "month": ledger.spent(db, since=ms), "day": ledger.spent(db, since=day_start())})
 
     @app.post("/money/deposit")
@@ -615,6 +623,22 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
     async def money_payee(request: Request, name: str = Form(...), org_id: str = Form(""), max_usd: float = Form(0),
                           notes: str = Form("")):
         create_payee(db, name=name, org_id=org_id or None, max_per_payment_usd=max_usd, notes=notes)
+        return back(request, "/money")
+
+    @app.post("/money/purchase/{pid}/{action}")
+    async def purchase_action(request: Request, pid: str, action: str, note: str = Form("")):
+        from .. import purchases
+        try:
+            if action in ("approve", "deny"):
+                await purchases.decide(core, purchase_id=pid, decider="human", approve=action == "approve",
+                                       reason=note or f"owner {action}d")
+            elif action == "cancel":
+                await purchases.cancel(core, purchase_id=pid, by="human")
+            else:
+                raise HTTPException(404)
+        except PolicyRefusal as e:
+            raise HTTPException(409, e.detail)
+        scheduler.poke()
         return back(request, "/money")
 
     @app.post("/money/payee/{pid}/toggle")
@@ -671,7 +695,7 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
         rows = db.all("SELECT p.*, o.name AS org_name FROM proposals p LEFT JOIN orgs o ON o.id = p.org_id "
                       "ORDER BY CASE p.status WHEN 'new' THEN 0 WHEN 'red_team' THEN 1 WHEN 'revising' THEN 1 WHEN 'parked' THEN 2 "
                       "WHEN 'launched' THEN 3 ELSE 4 END, COALESCE(p.redteam_score, p.total_score) DESC, p.created_at DESC LIMIT 100")
-        from ..ideas import case_text
+        from ..ideas import case_text, launch_bar
         for r in rows:
             r["scores"] = loads(r["scores_json"], {})
             r["evidence"] = loads(r["evidence_json"], [])
@@ -679,10 +703,14 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             r["case_text"] = case_text(r["case"]) if r["case"] else ""
             r["checks"] = loads(r["checks_json"], [])
             r["rt"] = loads(r["redteam_json"], None)
+            r["bar"] = launch_bar(settings, r, r["rt"]) if r["rt"] else None
         root = root_org(db)
         analyst = db.one("SELECT * FROM agents WHERE role = 'venture_analyst' AND status = 'active' ORDER BY created_at LIMIT 1")
         from ..ideas import PARAM_CHOICES, PARAM_LIMITS, PARAM_TEXT, get_params
-        return page(request, "ideas.html", proposals=rows, weights=SCORE_WEIGHTS, analyst=analyst,
+        sources = db.all("SELECT s.*, (SELECT COUNT(*) FROM idea_source_items i WHERE i.source_id = s.id AND i.status = 'sent') "
+                         "AS sent, (SELECT COUNT(*) FROM idea_source_items i WHERE i.source_id = s.id AND i.status = 'new') "
+                         "AS queued FROM idea_sources s ORDER BY s.created_at")
+        return page(request, "ideas.html", proposals=rows, weights=SCORE_WEIGHTS, analyst=analyst, sources=sources,
                     params=get_params(db), param_text=PARAM_TEXT, param_limits=PARAM_LIMITS, param_choices=PARAM_CHOICES,
                     pceo=org_ceo(db, root["id"]) if root else None, venture=settings.policy.get("venture", {}),
                     last_cycle=get_setting(db, "ideas:last_cycle", ""))
@@ -716,6 +744,31 @@ def create_app(core: Core, *, run_scheduler: bool = True) -> FastAPI:
             research_cycle(db, settings, force=True)
             scheduler.poke()
         return RedirectResponse("/ideas?saved=1", status_code=303)
+
+    @app.post("/ideas/sources")
+    async def ideas_source_add(request: Request, url: str = Form(...), order_by: str = Form("views"),
+                               max_videos: int = Form(0)):
+        from ..idea_sources import add_channel
+        try:
+            src = await add_channel(core, url, order_by=order_by, max_videos=max_videos)
+        except PolicyRefusal as e:
+            return RedirectResponse(f"/ideas?source_err={quote(e.detail)}", status_code=303)
+        except Exception as e:
+            return RedirectResponse(f"/ideas?source_err={quote(type(e).__name__ + ': ' + str(e)[:150])}", status_code=303)
+        return RedirectResponse(f"/ideas?source_added={quote(src['title'])}", status_code=303)
+
+    @app.post("/ideas/sources/{sid}/{action}")
+    async def ideas_source_action(request: Request, sid: str, action: str):
+        from ..idea_sources import poll
+        if action == "toggle":
+            db.execute("UPDATE idea_sources SET status = CASE status WHEN 'active' THEN 'paused' ELSE 'active' END WHERE id = ?",
+                       (sid,))
+        elif action == "check":
+            await poll(core, force=True)
+            scheduler.poke()
+        else:
+            raise HTTPException(404)
+        return back(request, "/ideas")
 
     @app.post("/ideas/research-now")
     async def ideas_research_now(request: Request):

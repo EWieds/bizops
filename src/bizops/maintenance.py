@@ -84,6 +84,9 @@ def stalled_tasks(db: Database, settings: Settings) -> int:
 
 
 def budget_alerts(db: Database, settings: Settings) -> int:
+    from .budget import spend_caps_enforced
+    if not spend_caps_enforced(settings):
+        return 0
     pct = float(_cfg(settings).get("budget_alert_pct", 80)) / 100
     n = 0
     for org in db.all("SELECT * FROM orgs WHERE status IN ('active','trial') AND monthly_cap_micros > 0"):
@@ -169,6 +172,34 @@ def audit_checks(db: Database, settings: Settings) -> int:
                           dedupe=f"stalled:{a['id']}:{day_start()[:10]}",
                           summary=f"{a['name']} ran {a['runs']} times in 5 days and finished no tasks.",
                           evidence="runs vs done tasks, last 5 days", recommendation="Review the role; restructure or retire.")
+    n += bottleneck_checks(db, settings)
+    return n
+
+
+# Refusals that are the system working as intended, not a bottleneck to engineer away.
+EXPECTED_RULES = ("kill_switch", "rate_limit.", "budget.", "platform.", "org.", "agent.budget", "sales.", "pay.")
+
+
+def bottleneck_checks(db: Database, settings: Settings) -> int:
+    """The same refusal (or owner-queue item) hitting agents again and again means a missing tool, grant or
+    route, not a lazy agent. Each one becomes an audit finding with examples, so it gets fixed in code."""
+    since = iso(now() - timedelta(hours=24))
+    limit = int(_cfg(settings).get("bottleneck_repeats", 5))
+    n = 0
+    for r in db.all("SELECT rule, verdict, COUNT(*) AS c, COUNT(DISTINCT agent_id) AS agents FROM policy_decisions "
+                    "WHERE ts >= ? AND verdict IN ('blocked','hard_stop') GROUP BY rule, verdict HAVING COUNT(*) >= ?",
+                    (since, limit)):
+        if r["rule"].startswith(EXPECTED_RULES) or r["rule"].startswith("approver."):
+            continue
+        ex = db.all("SELECT d.action, a.role, substr(d.args_json, 1, 200) AS args FROM policy_decisions d "
+                    "LEFT JOIN agents a ON a.id = d.agent_id WHERE d.rule = ? AND d.ts >= ? ORDER BY d.ts DESC LIMIT 4",
+                    (r["rule"], since))
+        n += _finding(db, kind="other", severity="medium", dedupe=f"bottleneck:{r['rule']}:{day_start()[:10]}",
+                      summary=f"Recurring bottleneck: '{r['rule']}' {r['verdict']} {r['c']} times in 24h "
+                              f"({r['agents']} agents).",
+                      evidence="\n".join(f"{e['role']} {e['action']}: {e['args']}" for e in ex),
+                      recommendation="Fix the cause in code (a missing tool, grant, route or clearer refusal), not "
+                                     "the agents' prompts.")
     return n
 
 
@@ -202,6 +233,51 @@ def management_reviews(db: Database, settings: Settings) -> int:
     return n
 
 
+def trial_reviews(db: Database, settings: Settings) -> int:
+    """Keep what sticks. A business on trial whose real outreach got no reply and no payment within
+    venture.trials.judge_after_days of its first email is paused (the owner can resume it); one that got paid
+    graduates to active. The clock starts at the first real email, so nothing is judged before it could sell."""
+    from .engine import set_paused
+    t = (settings.policy.get("venture") or {}).get("trials") or {}
+    days = float(t.get("judge_after_days", 14))
+    if days <= 0:
+        return 0
+    root = root_org(db)
+    pceo = org_ceo(db, root["id"]) if root else None
+    n = 0
+    for org in db.all("SELECT * FROM orgs WHERE status = 'trial'"):
+        paid = int(db.scalar("SELECT COUNT(*) FROM payments_in WHERE org_id = ? AND sandbox = 0 AND status = 'paid'",
+                             (org["id"],)) or 0)
+        if paid:
+            db.execute("UPDATE orgs SET status = 'active', updated_at = ? WHERE id = ?", (iso(), org["id"]))
+            log_event(db, actor_kind="system", kind="system", action="trial.graduate", org_id=org["id"],
+                      result={"payments": paid}, outcome="ok")
+            if pceo:
+                _system_msg(db, settings, pceo, f"{org['name']} got its first real payment and graduated from trial to "
+                                                "active. Tell the owner, and back what works.", type="status")
+            n += 1
+            continue
+        first = db.scalar("SELECT MIN(created_at) FROM emails WHERE org_id = ? AND direction = 'out' AND status = 'sent' "
+                          "AND provider != 'sandbox'", (org["id"],))
+        if not first or (now() - parse_iso(first)).total_seconds() < days * 86400:
+            continue
+        replies = int(db.scalar("SELECT COUNT(*) FROM emails WHERE org_id = ? AND direction = 'in' AND lead_id IS NOT NULL "
+                                "AND provider != 'sandbox'", (org["id"],)) or 0)
+        if replies >= int(t.get("min_replies", 1)):
+            continue
+        sent = int(db.scalar("SELECT COUNT(*) FROM emails WHERE org_id = ? AND direction = 'out' AND status = 'sent'",
+                             (org["id"],)) or 0)
+        set_paused(db, "org", org["id"], True, actor="system")
+        log_event(db, actor_kind="system", kind="system", action="trial.cut", org_id=org["id"],
+                  result={"emails_sent": sent, "replies": replies, "days": days}, outcome="ok")
+        if pceo:
+            _system_msg(db, settings, pceo, f"{org['name']} was paused: {sent} emails over {days:g}+ days got no reply and no "
+                                            "payment. Note what you learned in the knowledge base so the next ideas avoid "
+                                            "it, and tell the owner in one line.", type="status")
+        n += 1
+    return n
+
+
 def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[str, int]:
     """One maintenance pass. Each job throttles itself; `force` runs them all now (tests, CLI)."""
     cfg = _cfg(settings)
@@ -209,6 +285,8 @@ def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[s
     if force or _due(db, "expire", 30):
         out["expired"] = expire_messages(db)
     if force or _due(db, "goals", 60):
+        from .goals import drop_orphans
+        out["orphan_goals"] = drop_orphans(db, settings)
         out["goal_reviews"] = goal_reviews(db, settings)
     if force or _due(db, "stalled", 300):
         out["stalled"] = stalled_tasks(db, settings)
@@ -224,7 +302,10 @@ def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[s
         out["goals_measured"] = business.measure_goals(db)
     if force or _due(db, "ideas", 600):
         from . import ideas
+        out["pool_agents"] = ideas.ensure_pools(db, settings)
         out["research_cycle"] = int(ideas.research_cycle(db, settings))
+        out["auto_launched"] = ideas.launch_sweep(db, settings)
+        out["trials_reviewed"] = trial_reviews(db, settings)
         out["red_team_queued"] = ideas.red_team_backlog(db, settings)
     if force or _due(db, "mgmt", 600):
         out["management_reviews"] = management_reviews(db, settings)
@@ -266,10 +347,14 @@ def heartbeat_needed(db: Database, settings: Settings, agent: dict) -> tuple[boo
 
 
 async def poll_connectors(core) -> dict[str, int]:
-    """Pull new replies from the mailbox and new payments from the billing provider."""
-    from . import business
+    """Pull new replies from the mailbox and new payments from the billing provider; renew monthly
+    purchases (debit the wallet or pause the card); close browser tabs nobody is using; close setup items
+    whose connection now works."""
+    from . import business, idea_sources, owner_setup, purchases
     out: dict[str, int] = {}
-    for name, fn in (("emails_in", business.poll_email), ("payments_in", business.poll_billing)):
+    for name, fn in (("emails_in", business.poll_email), ("payments_in", business.poll_billing),
+                     ("renewals", purchases.renew_due), ("tabs_closed", lambda c: c.browser.close_idle()),
+                     ("setup_connected", owner_setup.resolve_connected), ("youtube_videos", idea_sources.poll)):
         try:
             out[name] = await fn(core)
         except Exception as e:

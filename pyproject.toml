@@ -13,10 +13,12 @@ dependencies = [
   "python-multipart>=0.0.9",
   "youtube-transcript-api>=1.2",
   "pypdf>=5",
+  "yt-dlp>=2025.1.1",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+browser = ["playwright>=1.47"]
 
 [project.scripts]
 bizops = "bizops.cli:main"

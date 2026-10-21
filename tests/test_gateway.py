@@ -76,6 +76,7 @@ async def test_rate_limit(core, org):
 
 
 async def test_tool_spend_blocked_by_budget(core, org):
+    core.settings.policy["budgets"]["agent_budgets"] = True
     core.db.execute("UPDATE agents SET budget_micros = 1000 WHERE id = ?", (org["researcher"]["id"],))
     r = await invoke(ctx(core, org["researcher"]), "web_search", {"query": "lawn care"})
     assert not r.ok and "agent.budget" in r.content

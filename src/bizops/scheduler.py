@@ -27,6 +27,8 @@ class Scheduler:
         self.tick_s = tick_s
         limit = int(core.settings.policy["runs"]["max_concurrent_runs"])
         self.sem = asyncio.Semaphore(limit)
+        # The owner never waits behind routine work: runs that answer the owner use their own slots.
+        self.owner_sem = asyncio.Semaphore(int(core.settings.policy["runs"].get("owner_lane_runs", 2)))
         self.running: dict[str, asyncio.Task] = {}
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
@@ -58,10 +60,28 @@ class Scheduler:
             if r["id"] in self.running:
                 continue
             last = parse_iso(r["last_run_at"])
-            if last and current - last < timedelta(seconds=r["min_interval_s"] or 0):
+            if (last and current - last < timedelta(seconds=r["min_interval_s"] or 0)
+                    and not self.owner_waiting(r["id"])):
                 continue
             out.append((r["id"], "message" if r["wake_requested_at"] else "timer"))
         return out
+
+    def owner_waiting(self, agent_id: str) -> bool:
+        return bool(self.core.db.one("SELECT 1 AS x FROM messages WHERE recipient_kind = 'agent' AND recipient_id = ? "
+                                     "AND sender_kind = 'human' AND status = 'unread' LIMIT 1", (agent_id,)))
+
+    async def _acquire(self, agent_id: str) -> asyncio.Semaphore:
+        """A run slot. Waiting runs re-check every second, so one the owner messages meanwhile moves to the
+        owner lane instead of queuing behind routine work."""
+        while True:
+            if self.owner_waiting(agent_id):
+                await self.owner_sem.acquire()
+                return self.owner_sem
+            try:
+                await asyncio.wait_for(self.sem.acquire(), timeout=1.0)
+                return self.sem
+            except TimeoutError:
+                continue
 
     def maintenance(self) -> None:
         loop = asyncio.get_running_loop()
@@ -137,8 +157,11 @@ class Scheduler:
 
     async def _run(self, agent_id: str, reason: str) -> None:
         try:
-            async with self.sem:
+            sem = await self._acquire(agent_id)
+            try:
                 await run_agent(self.core, agent_id, reason)
+            finally:
+                sem.release()
         except Exception:
             log.exception("run failed for %s", agent_id)
         finally:

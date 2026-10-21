@@ -198,17 +198,41 @@ def record_inbound(db: Database, *, org_id: str | None, from_addr: str, to_addr:
     """Store an inbound email, matched to a lead by sender address. Processed by process_inbound."""
     lead = db.one("SELECT * FROM leads WHERE lower(email) = ? ORDER BY created_at DESC LIMIT 1", (from_addr.lower(),))
     org_id = org_id or (lead["org_id"] if lead else None)
+    account_mail = False
     if not org_id:
-        return None
+        # Not a lead: mail to a business's own address (mailbox+<slug>@domain). Automated mail (verification
+        # codes, receipts) is kept for read_account_mail only; mail from a person (an inquiry from the website)
+        # also goes through reply triage, which wakes the business's CEO.
+        org = _org_for_signup_address(db, to_addr)
+        if not org:
+            return None
+        org_id, account_mail = org["id"], True
     if db.one("SELECT 1 AS x FROM emails WHERE provider_id = ? AND direction = 'in'", (provider_id,)):
         return None
     eid = new_id("em")
     with db.tx() as conn:
         insert(conn, "emails", {"id": eid, "org_id": org_id, "lead_id": lead["id"] if lead else None, "agent_id": None,
                                 "direction": "in", "from_addr": from_addr, "to_addr": to_addr, "subject": subject,
-                                "body": body, "status": "received", "provider": provider, "provider_id": provider_id,
-                                "error": None, "processed": 0, "sim_due_at": None, "created_at": iso()})
+                                "body": body, "status": "account_mail" if account_mail else "received",
+                                "provider": provider, "provider_id": provider_id, "error": None,
+                                "processed": int(account_mail and bool(AUTOMATED_MAIL.search(f"{from_addr} {subject}"))),
+                                "sim_due_at": None, "created_at": iso()})
     return eid
+
+
+AUTOMATED_MAIL = re.compile(r"no-?reply|do-?not-?reply|notifications?@|mailer-daemon|postmaster|verif|confirm|"
+                            r"security@|accounts?@|billing@|receipt|invoice|welcome to|your code|one-time", re.I)
+
+
+def _org_for_signup_address(db: Database, to_addr: str) -> dict | None:
+    from email.utils import getaddresses
+    for _, addr in getaddresses([to_addr or ""]):
+        local = addr.split("@", 1)[0]
+        if "+" in local:
+            org = db.one("SELECT * FROM orgs WHERE slug = ?", (local.split("+", 1)[1].lower(),))
+            if org:
+                return org
+    return None
 
 
 def _pending_inbound(db: Database) -> list[dict]:

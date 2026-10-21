@@ -30,6 +30,15 @@
       <div><div class="text-slate-500">Team</div><div class="font-medium">{{ o.agents }} agents</div></div>
       <div><div class="text-slate-500">Tasks</div><div class="font-medium">{{ o.open_tasks }} open · {{ o.blocked }} blocked · {{ o.done_tasks }} done</div></div>
     </div>
+    {% set t = o.today %}
+    <div class="text-xs border-t pt-2 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span class="pill {{ 'o-ok' if t.state == 'working now' else 'o-pending' if t.state == 'active today' else 'o-muted' }}">{{ t.state }}</span>
+      <b>Today:</b><span>{{ t.emails_sent }} emails sent</span><span>{{ t.replies }} replies</span><span>{{ t.leads_added }} new leads</span>
+      <span>{{ t.payments }} payments</span><span>{{ t.pages }} pages</span><span>{{ t.runs }} agent runs</span><span>{{ t.spent|usd }} spent</span>
+      {% if t.refused %}<a class="text-amber-700 underline" href="/activity?org={{ o.id }}&outcome=refused">{{ t.refused }} refused</a>{% endif %}
+      {% if t.waiting_on_owner %}<a class="text-violet-700 underline" href="/queue">{{ t.waiting_on_owner }} waiting on you</a>{% endif %}
+      {% if t.last_action %}<span class="text-slate-500">last: {{ t.last_action.action }} by {{ t.last_action.agent or 'system' }} {{ t.last_action.ts|ago }}</span>{% endif %}
+    </div>
     {% if o.goals %}<div class="space-y-1.5 border-t pt-2">{% for g in o.goals %}{{ goal_line(g) }}{% endfor %}</div>
     {% else %}<div class="text-xs text-slate-500 border-t pt-2">No goals yet: the CEO sets them at kickoff.</div>{% endif %}
   </section>

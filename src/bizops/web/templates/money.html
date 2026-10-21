@@ -1,11 +1,26 @@
 {% extends "base.html" %}{% from "_macros.html" import card %}
 {% block body %}
 {% call card("Caps") %}
-<div>Platform: {{ caps.month|usd }} of {{ caps.monthly|usd }} this month · {{ caps.day|usd }} of {{ caps.daily|usd }} today · hard ceiling {{ caps.ceiling|usd }}</div>
+{% if caps.on %}<div>Platform: {{ caps.month|usd }} of {{ caps.monthly|usd }} this month · {{ caps.day|usd }} of {{ caps.daily|usd }} today · hard ceiling {{ caps.ceiling|usd }}</div>{% else %}<div>Spending caps are <b>off</b> (budgets.spend_caps in config/policy.yaml): {{ caps.month|usd }} this month · {{ caps.day|usd }} today. Wallets, purchase and payment limits still apply.</div>{% endif %}
 <div class="text-xs text-slate-500">Payment limits: {{ '$%s'|format(money.per_payment_max_usd) }} per payment, {{ '$%s'|format(money.daily_payments_max_usd_per_org) }} per org per day. Change them in config/policy.yaml.</div>
 {% endcall %}
+{% call card("Purchases", '<span class="pill ' ~ ('o-ok' if cards == 'privacy' else 'o-muted') ~ '">cards: ' ~ cards ~ '</span>') %}
+<p class="text-xs text-slate-500 mb-2">Agents request tools and subscriptions; the Chief Investment Officer approves or denies (you can too, here). Each approval takes the amount out of that business's wallet and issues a card limited to exactly that amount, locked to the vendor. Limits: {{ '$%s'|format(purchase_limits.max_per_purchase_usd) }} per purchase, {{ '$%s'|format(purchase_limits.max_monthly_subscriptions_usd_per_org) }}/month of subscriptions per business. Monthly ones are taken from the wallet every 30 days; if the wallet can't cover it, the card pauses until you add money.</p>
+<table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Asked</th><th>Business</th><th>By</th><th>What</th><th>Amount</th><th>Why</th><th>Status</th><th></th></tr></thead><tbody>
+{% for p in buys %}<tr class="border-t text-xs align-top"><td>{{ p.created_at|ago }}</td><td>{{ p.org_name }}</td><td>{{ p.agent_name or '' }}</td>
+<td><b>{{ p.item }}</b><br>{{ p.vendor }}{% if p.vendor_url %} · <a class="underline" href="{{ p.vendor_url }}" target="_blank" rel="noopener">link</a>{% endif %}</td>
+<td>{{ p.amount_micros|usd }}{{ '/mo' if p.period == 'monthly' else '' }}</td><td class="max-w-xs">{{ p.reason }}</td>
+<td><span class="pill {{ 'o-ok' if p.status == 'approved' else ('o-muted' if p.status in ('pending','paused') else 'o-refused') }}">{{ p.status }}</span>
+{% if p.card_last4 %}<br>card ••{{ p.card_last4 }}{% endif %}{% if p.next_charge_at and p.status in ('approved','paused') %}<br>next {{ p.next_charge_at[:10] }}{% endif %}
+{% if p.decision_reason %}<br><span class="text-slate-500">{{ p.decider_name or ('you' if p.decided_by == 'human' else '') }}: {{ p.decision_reason }}</span>{% endif %}</td>
+<td>{% if p.status == 'pending' %}<form method="post" action="/money/purchase/{{ p.id }}/approve" class="mb-1"><input name="note" placeholder="note" size="10" class="border rounded p-1"><button class="px-2 py-0.5 rounded bg-slate-800 text-white">approve</button></form>
+<form method="post" action="/money/purchase/{{ p.id }}/deny"><input name="note" placeholder="reason" size="10" class="border rounded p-1"><button class="px-2 py-0.5 rounded border">deny</button></form>
+{% elif p.status in ('approved','paused') %}<form method="post" action="/money/purchase/{{ p.id }}/cancel"><button class="underline">cancel (close card)</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="8" class="text-slate-500 text-xs py-1">No purchase requests yet.</td></tr>{% endfor %}
+</tbody></table>
+{% endcall %}
 {% call card("Org wallets") %}
-<p class="text-xs text-slate-500 mb-2">Wallets are internal allocations. Agents can only pay owner-allowlisted payees from them. Real cash stays in your accounts; the payments provider is <b>sandbox</b> unless you configure a real one.</p>
+<p class="text-xs text-slate-500 mb-2">Wallets are what you load for each business: the most its agents can ever spend on purchases and payments. Agents can't add to them. Purchases use real money once a card issuer is connected (Connect page); payments to allowlisted payees use the <b>sandbox</b> provider unless you configure a real one.</p>
 <table class="w-full"><thead class="text-left text-xs text-slate-500"><tr><th>Org</th><th>Wallet</th><th>Paid today</th><th>Spend (month)</th><th>Model cost</th><th>Revenue (all time)</th><th>Cleared</th><th>Deposit</th></tr></thead><tbody>
 {% for o in orgs %}<tr class="border-t"><td>{{ o.name }}</td><td><b>{{ o.wallet|usd }}</b></td><td>{{ o.paid_today|usd }}</td><td>{{ o.spent|usd }} / {{ o.monthly_cap_micros|usd }}</td><td>{{ o.model_cost|usd }}</td><td>{{ o.revenue|usd }}{% if o.sandbox_revenue %} <span class="text-amber-700 text-xs">+ test {{ o.sandbox_revenue|usd }}</span>{% endif %}</td><td>{{ o.cleared|usd }}</td>
 <td><form method="post" action="/money/deposit" class="flex gap-1"><input type="hidden" name="org_id" value="{{ o.id }}"><input name="amount" size="5" class="border rounded p-1 text-xs" placeholder="$"><button class="text-xs px-2 rounded bg-slate-800 text-white">add</button></form></td></tr>{% endfor %}
