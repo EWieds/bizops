@@ -160,3 +160,11 @@ def test_sweep_launches_qualifying_and_revives_red_team_parked(core, org):
     assert ideas.launch_sweep(core.db, core.settings) == 1
     assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (p["id"],)) == "launched"
     assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (owner_parked["id"],)) == "parked"
+
+
+def test_low_org_cap_doesnt_block_a_launch_without_caps(core, org):
+    from bizops.engine import create_org_from_template
+    core.settings.policy["budgets"].update({"spend_caps": False, "agent_budgets": False})
+    oid = create_org_from_template(core.db, core.settings, template="generic", name="Tiny", parent_org_id=org["root"],
+                                   supervisor_agent_id=org["pceo"]["id"], monthly_cap_usd=5)
+    assert core.db.scalar("SELECT COUNT(*) FROM agents WHERE org_id = ?", (oid,)) > 0
