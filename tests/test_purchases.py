@@ -77,7 +77,7 @@ async def test_request_notifies_cio_and_approval_issues_card(core, org, cio, car
 
 async def test_wallet_and_limits_are_hard(core, org, cio, cards):
     deposit(core.db, org_id=org["org"], amount_usd=120)
-    r = await ask(core, org, amount=500)
+    r = await ask(core, org, amount=600)
     assert not r.ok and "purchase.max" in r.content
     assert (await ask(core, org, amount=99)).ok
     r = await ask(core, org, amount=30, period="once")  # 99 is already pending against the wallet

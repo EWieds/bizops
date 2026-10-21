@@ -21,13 +21,15 @@ def test_cheap_fast_upside_lowers_the_bar_and_risk_raises_it(settings):
     assert cheap["bar"] < plain["bar"] < risky["bar"]
     assert any("cheap/fast" in w for w in cheap["why"]) and any("legal" in w for w in risky["why"])
     assert any("author" in w for w in risky["why"])
-    assert 2.8 <= cheap["bar"] and risky["bar"] <= 4.2
+    assert 2.5 <= cheap["bar"] and risky["bar"] <= 3.8
 
 
 def test_floors_and_profit_block_even_a_high_score(settings):
-    lb = launch_bar(settings, {"total_score": 4}, review(demand=2, automation_fit=5, time_to_revenue=5, cost_to_test=5))
+    lb = launch_bar(settings, {"total_score": 4}, review(legal_risk=2, automation_fit=5, time_to_revenue=5, cost_to_test=5))
     assert lb["floors_failed"] and not lb["clears"]
+    settings.policy["venture"]["launch_rule"] = {"require_month6_profit": True}
     assert not launch_bar(settings, {"total_score": 4}, review(m6=0, demand=5, automation_fit=5))["clears"]
+    settings.policy["venture"]["launch_rule"] = {}
     good = launch_bar(settings, {"total_score": 3.6}, review(m6=12000, demand=4, automation_fit=4, cost_to_test=5,
                                                              time_to_revenue=4))
     assert good["clears"] and good["score"] >= good["bar"]
@@ -118,3 +120,43 @@ def test_ideas_page_adds_and_lists_channels(core, org, fake_youtube):
         assert r.status_code == 303 and "source_added" in r.headers["location"]
         page = c.get("/ideas").text
         assert "Side Hustle Lab" in page and "most viewed first" in page and "top 25" in page
+
+
+def test_cheap_ideas_launch_whatever_the_score(settings):
+    import json
+    cheap = {"total_score": 2, "business_case_json": json.dumps({"costs": {"startup_usd": 200, "monthly_usd": 250}})}
+    pricey = {"total_score": 2, "business_case_json": json.dumps({"costs": {"startup_usd": 2000, "monthly_usd": 250}})}
+    bad = review(**{**{k: 1.5 for k in SCORE_WEIGHTS}, "legal_risk": 3})
+    assert launch_bar(settings, cheap, bad)["clears"] and launch_bar(settings, cheap, bad)["cheap"]
+    assert not launch_bar(settings, pricey, bad)["clears"]
+    assert not launch_bar(settings, cheap, review(legal_risk=2))["clears"]  # legal risk still blocks
+
+
+def test_venture_fund_seeds_each_launch(core, org):
+    import json
+    from bizops import ideas, ledger
+    from bizops.payments import deposit
+    deposit(core.db, org_id=org["root"], amount_usd=700)
+    p = {"id": "prop_x", "title": "Thing", "business_case_json": json.dumps({"costs": {"startup_usd": 100, "monthly_usd": 300}})}
+    assert ideas.fund_launch(core.db, core.settings, org["root"], org["org"], p) == 400_000_000
+    assert ledger.wallet_balance(core.db, org["org"]) == 400_000_000
+    assert ledger.wallet_balance(core.db, org["root"]) == 300_000_000
+    assert ideas.fund_launch(core.db, core.settings, org["root"], org["org"], p) == 300_000_000  # what's left
+    assert ideas.fund_launch(core.db, core.settings, org["root"], org["org"], p) == 0
+
+
+def test_sweep_launches_qualifying_and_revives_red_team_parked(core, org):
+    from test_ideas_chat import PROPOSAL, analyst, red_team
+    from bizops import ideas
+    core.settings.policy["venture"]["launch_in_code"] = True
+    p = ideas.submit_proposal(core.db, core.settings, author=analyst(core), fields=dict(PROPOSAL))  # $65 to start
+    core.settings.policy["venture"]["launch_in_code"] = False
+    red_team(core, p["id"], verdict="no_go")
+    core.db.execute("UPDATE proposals SET status = 'parked' WHERE id = ?", (p["id"],))  # parked under the old rules
+    owner_parked = ideas.submit_proposal(core.db, core.settings, author=analyst(core), fields={**PROPOSAL, "title": "Mine"})
+    red_team(core, owner_parked["id"])
+    core.db.execute("UPDATE proposals SET status = 'parked', decided_by = 'human' WHERE id = ?", (owner_parked["id"],))
+    core.settings.policy["venture"]["launch_in_code"] = True
+    assert ideas.launch_sweep(core.db, core.settings) == 1
+    assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (p["id"],)) == "launched"
+    assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (owner_parked["id"],)) == "parked"

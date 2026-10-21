@@ -94,6 +94,29 @@ def upgrade_grants(db: Database) -> int:
     return n
 
 
+# Roles whose prompt changed after agents of that role were created: (version, role). Their base prompt is
+# replaced once; any per-org focus they were given is kept.
+PROMPT_UPGRADES = [("0009", "red_team"), ("0009", "venture_analyst"), ("0009", "ceo"), ("0009", "marketer"),
+                   ("0009", "platform_cfo")]
+
+
+def upgrade_prompts(db: Database, settings) -> int:
+    from .engine import get_setting, set_setting
+    n = 0
+    for version, role in PROMPT_UPGRADES:
+        key = f"prompt_upgrade:{version}:{role}"
+        if get_setting(db, key) or role not in settings.roles:
+            continue
+        base = settings.role(role)["prompt"].strip()
+        for a in db.all("SELECT id, system_prompt FROM agents WHERE role = ?", (role,)):
+            focus = a["system_prompt"].split("\n\nYour specific focus in this org:", 1)
+            db.execute("UPDATE agents SET system_prompt = ? WHERE id = ?",
+                       (base + ("\n\nYour specific focus in this org:" + focus[1] if len(focus) > 1 else ""), a["id"]))
+            n += 1
+        set_setting(db, key, "1")
+    return n
+
+
 class Core:
     def __init__(self, settings: Settings, *, db: Database | None = None, llm: LLMClient | None = None,
                  payments: PaymentProvider | None = None, cards: CardProvider | None = None):
@@ -131,6 +154,7 @@ class Core:
     def init(self) -> "Core":
         self.db.migrate()
         upgrade_grants(self.db)
+        upgrade_prompts(self.db, self.settings)
         self.settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
         return self
 

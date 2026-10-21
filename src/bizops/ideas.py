@@ -37,10 +37,44 @@ def score_total(scores: dict[str, Any]) -> float:
     return round(total, 2)
 
 
-LAUNCH_RULE = {"base": 3.4, "min": 2.8, "max": 4.2,
-               "floors": {"demand": 2.5, "automation_fit": 2.5, "legal_risk": 2.0},
+LAUNCH_RULE = {"base": 3.0, "min": 2.5, "max": 3.8,
+               "floors": {"legal_risk": 2.5},
+               "safe_bet": {"legal_risk": 4, "owner_steps": 4, "cost_to_test": 4},
+               "cheap_launch_usd": 500,
+               "require_month6_profit": False,
                "cheap_fast_discount": 0.3, "upside_discount": 0.2, "upside_usd": 10000,
                "legal_premium": 0.2, "owner_steps_premium": 0.15, "disagreement_premium": 0.15}
+
+
+def fund_launch(db: Database, settings: Settings, root_id: str, org_id: str, p: dict) -> int:
+    """Move a new business's starting capital (its startup + first month, at most venture.fund_per_launch_usd)
+    from the platform's wallet, the venture fund the owner loads, into its own wallet. Returns micros moved."""
+    from . import ledger
+    from .util import usd_to_micros
+    cap = float((settings.policy.get("venture") or {}).get("fund_per_launch_usd", 500))
+    want = usd_to_micros(min(cap, startup_capital(p) or cap))
+    amount = max(0, min(want, ledger.wallet_balance(db, root_id)))
+    if amount <= 0:
+        return 0
+    with db.tx() as conn:
+        ledger.record(conn, org_id=root_id, kind="allocation_out", amount_micros=amount, source="system",
+                      memo=f"venture fund -> {p['title'][:60]}", ref_id=org_id)
+        ledger.record(conn, org_id=org_id, kind="allocation_in", amount_micros=amount, source="system",
+                      memo="starting capital from the venture fund", ref_id=p["id"])
+        log_event(conn, actor_kind="system", kind="system", action="venture.fund", org_id=org_id,
+                  result={"usd": amount / 1e6, "proposal": p["id"]}, outcome="ok")
+    return amount
+
+
+def startup_capital(p: dict) -> float | None:
+    """Money a proposal needs to get going: startup costs plus the first month, from its business case."""
+    try:
+        costs = json.loads(p.get("business_case_json") or "{}").get("costs") or {}
+        if costs.get("startup_usd") is None and costs.get("monthly_usd") is None:
+            return None  # unknown is not cheap
+        return float(costs.get("startup_usd") or 0) + float(costs.get("monthly_usd") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def launch_bar(settings: Settings, p: dict, review: dict | None = None) -> dict[str, Any]:
@@ -84,11 +118,21 @@ def launch_bar(settings: Settings, p: dict, review: dict | None = None) -> dict[
         why.append(f"+{float(rule['disagreement_premium']):.2f} author {author:g} vs red team {red:g}")
     bar = round(min(float(rule["max"]), max(float(rule["min"]), bar)), 2)
     floors = [f"{k} {rs[k]:g} < {v:g}" for k, v in (rule.get("floors") or {}).items() if rs.get(k, 5) < float(v)]
-    ok = red >= bar and not floors and m6 > 0
-    return {"bar": bar, "score": red, "clears": ok, "why": why, "floors_failed": floors, "month6_profit_usd": m6,
-            "summary": (f"red-team score {red:g} vs bar {bar:g} ({'; '.join(why)})"
-                        + (f"; below floor: {', '.join(floors)}" if floors else "")
-                        + ("" if m6 > 0 else "; no month-6 profit"))}
+    need_profit = bool(rule.get("require_month6_profit"))
+    # A safe bet (almost no legal risk, almost nothing for the owner to do, cheap to test) launches whatever its
+    # score or verdict: trying it costs little, and the market decides better than any review.
+    safe = all(rs.get(k, 0) >= float(v) for k, v in (rule.get("safe_bet") or {}).items()) and bool(rule.get("safe_bet"))
+    # Anything that needs little capital launches too: the owner would rather try it than debate it.
+    capital = startup_capital(p)
+    cheap = capital is not None and capital <= float(rule.get("cheap_launch_usd") or 0)
+    ok = not floors and (safe or cheap or (red >= bar and (m6 > 0 or not need_profit)))
+    return {"bar": bar, "score": red, "clears": ok, "safe_bet": safe, "cheap": cheap, "capital_usd": capital,
+            "why": why, "floors_failed": floors, "month6_profit_usd": m6,
+            "summary": ("SAFE BET (low legal risk, few owner steps, cheap test): launches regardless of score. " if safe else "")
+                       + (f"CHEAP (${capital:,.0f} to start): launches regardless of score. " if cheap else "")
+                       + f"red-team score {red:g} vs bar {bar:g} ({'; '.join(why)})"
+                       + (f"; below floor: {', '.join(floors)}" if floors else "")
+                       + ("; no month-6 profit" if need_profit and m6 <= 0 else "")}
 
 
 # ---------------------------------------------------------------- the owner's research parameters
@@ -428,8 +472,43 @@ def _redteam_minimums(source: str) -> tuple[int, int]:
     return (5, 2) if source == "owner" else (3, 1)
 
 
+def pool_agent(db: Database, role: str) -> dict | None:
+    """The least busy active agent of a role (venture analysts and red teamers work as pools)."""
+    return db.one("SELECT a.* FROM agents a WHERE a.role = ? AND a.status = 'active' ORDER BY "
+                  "(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = a.id AND t.status IN ('open','in_progress')), "
+                  "a.created_at LIMIT 1", (role,))
+
+
 def red_team_agent(db: Database) -> dict | None:
-    return db.one("SELECT * FROM agents WHERE role = 'red_team' AND status = 'active' ORDER BY created_at LIMIT 1")
+    return pool_agent(db, "red_team")
+
+
+def ensure_pools(db: Database, settings: Settings) -> int:
+    """Keep venture.analysts venture analysts and venture.red_teams red teamers on the platform, so a flood of
+    ideas (a whole YouTube channel, a research spree) is worked in parallel."""
+    from .engine import agent_row
+    root = root_org(db)
+    if not root:
+        return 0
+    v = settings.policy.get("venture", {})
+    specs = {a["role"]: a for a in settings.template("platform")["agents"]}
+    pceo = org_ceo(db, root["id"])
+    added = 0
+    for role, want in (("venture_analyst", int(v.get("analysts", 1))), ("red_team", int(v.get("red_teams", 1)))):
+        have = int(db.scalar("SELECT COUNT(*) FROM agents WHERE org_id = ? AND role = ? AND status != 'retired'",
+                             (root["id"], role)) or 0)
+        spec = specs.get(role)
+        for i in range(have, want):
+            if not spec:
+                break
+            parent = None if role == "red_team" or not pceo else pceo
+            row = agent_row(settings, spec={**spec, "name": f"{spec.get('name') or role} {i + 1}"}, org_id=root["id"],
+                            parent_id=parent["id"] if parent else None, depth=1 if parent else 0, created_by="system",
+                            ts=iso())
+            with db.tx() as conn:
+                insert(conn, "agents", row)
+            added += 1
+    return added
 
 
 def send_to_red_team(db: Database, settings: Settings, p: dict, *, response: str = "") -> None:
@@ -491,8 +570,14 @@ def record_red_team(db: Database, settings: Settings, *, reviewer: dict, proposa
     score = score_total(revised)
     max_rounds = int(settings.policy.get("venture", {}).get("red_team_max_rounds", 3))
     status = {"go": "new", "no_go": "parked", "fix": "revising"}[verdict]
-    if verdict == "fix" and p["review_round"] >= max_rounds:
-        status = "parked"
+    # The red team's job is objections the business then solves, not a veto: a 'fix' that already clears its
+    # bar launches with the required changes as the new CEO's first tasks; review rounds never end in "parked";
+    # a safe bet launches even after a no-go.
+    lb = launch_bar(settings, p, {"revised_scores": revised, "revised_projection": rp})
+    if verdict == "fix" and (lb["clears"] or p["review_round"] >= max_rounds):
+        status = "new"
+    if verdict == "no_go" and lb["clears"]:  # cheap or a safe bet, and legally fine
+        status = "new"
     stored = {k: review.get(k) for k in ("summary", "fatal_flaws", "required_changes", "kill_criteria")}
     stored.update({"verdict": verdict, "risks": risks, "counter_evidence": counter, "assumption_challenges": challenges,
                    "revised_scores": revised, "revised_projection": rp, "round": p["review_round"]})
@@ -515,8 +600,42 @@ def record_red_team(db: Database, settings: Settings, *, reviewer: dict, proposa
                                f"Required changes: {'; '.join(map(str, review.get('required_changes') or []))}. "
                                f"Their case against it: {review.get('summary')} Fix what's fixable with real evidence (or "
                                "concede the point and lower your numbers), then call revise_proposal with your response."))
+    if status == "new" and auto_launch(db, settings, proposal_id):
+        status = "launched"
     _notify_platform_ceo(db, settings, {**p, "status": status, "redteam_verdict": verdict, "redteam_score": score}, stored)
     return {**p, "status": status, "redteam_verdict": verdict, "redteam_score": score}
+
+
+def auto_launch(db: Database, settings: Settings, proposal_id: str) -> str | None:
+    """Launch a reviewed proposal in code as soon as it qualifies (its bar, or a safe bet), inside the venture
+    limits, instead of waiting for a model to decide. Returns the new org id, or None if it doesn't qualify."""
+    v = settings.policy.get("venture", {})
+    if not (v.get("auto_launch", True) and v.get("launch_in_code", True)):
+        return None
+    root = root_org(db)
+    ceo = org_ceo(db, root["id"]) if root else None
+    if not ceo:
+        return None
+    p = db.one("SELECT * FROM proposals WHERE id = ?", (proposal_id,))
+    lb = launch_bar(settings, p)
+    try:
+        return launch_proposal(db, settings, proposal_id=proposal_id, actor=ceo,
+                               reason=f"auto-launched: {lb['summary']}"[:500])
+    except PolicyRefusal as e:
+        log_event(db, actor_kind="system", kind="decision", action="proposal.auto_launch", args={"proposal": proposal_id},
+                  result={"rule": e.rule, "detail": e.detail}, outcome="refused", ref_type="proposal", ref_id=proposal_id)
+        return None
+
+
+def launch_sweep(db: Database, settings: Settings) -> int:
+    """Reviewed proposals waiting for a decision launch as soon as they qualify and the venture limits allow; so do
+    ones the red team parked that qualify under today's rules (never ones the owner parked or rejected)."""
+    n = 0
+    for p in db.all("SELECT id FROM proposals WHERE redteam_verdict IS NOT NULL AND (status = 'new' OR (status = 'parked' "
+                    "AND COALESCE(decided_by, '') != 'human')) ORDER BY status = 'parked', redteam_score DESC"):
+        if auto_launch(db, settings, p["id"]):
+            n += 1
+    return n
 
 
 def _notify_platform_ceo(db: Database, settings: Settings, p: dict, review: dict) -> None:
@@ -532,7 +651,10 @@ def _notify_platform_ceo(db: Database, settings: Settings, p: dict, review: dict
             f"adjusted score {p['redteam_score']}/5 (author {p['total_score']}/5). Red team projects first revenue in "
             f"{rp.get('time_to_first_revenue_days')} days, month-6 profit ${rp.get('month6_profit_usd')}. "
             f"Case against: {review.get('summary')}")
-    if p["status"] == "new":
+    if p["status"] == "launched":
+        tail = (f" It qualified ({lb['summary']}) and was LAUNCHED automatically as a business on trial. The red team's "
+                "required changes are its CEO's first tasks. Tell the owner in one line.")
+    elif p["status"] == "new":
         tail = (f" Launch bar for this one: {lb['summary']}. It {'CLEARS' if lb['clears'] else 'does NOT clear'} the bar. "
                 "Standing authorization: launch it with decide_proposal(approve) only if it clears and it's within the "
                 "venture budget; otherwise park it with a reason. Tell the owner what you decided and the red team's "
@@ -610,16 +732,15 @@ def launch_proposal(db: Database, settings: Settings, *, proposal_id: str, actor
     if p["status"] in ("red_team", "revising") or not p["redteam_verdict"]:
         raise PolicyRefusal("proposal.red_team", "the red team hasn't finished reviewing this proposal")
     review = json.loads(p["redteam_json"] or "{}")
-    if actor is not None:  # agents launch only what survived the red team; the owner may overrule it
-        if p["redteam_verdict"] != "go":
-            raise PolicyRefusal("proposal.red_team", f"red team verdict is {p['redteam_verdict']}; only a 'go' can launch")
+    if actor is not None:  # agents launch what clears its bar (or is a safe bet); the owner may launch anything
         lb = launch_bar(settings, p, review)
-        if lb["month6_profit_usd"] <= 0:
-            raise PolicyRefusal("proposal.profit", "the red team doesn't see a profit by month 6")
         if lb["floors_failed"]:
             raise PolicyRefusal("proposal.floor", f"below a hard floor: {', '.join(lb['floors_failed'])}")
-        if not lb["clears"]:
-            raise PolicyRefusal("proposal.score", f"doesn't clear its launch bar: {lb['summary']}")
+        if not (lb["safe_bet"] or lb["cheap"]):
+            if p["redteam_verdict"] == "no_go":
+                raise PolicyRefusal("proposal.red_team", "the red team said no-go and it's neither cheap nor a safe bet")
+            if not lb["clears"]:
+                raise PolicyRefusal("proposal.score", f"doesn't clear its launch bar: {lb['summary']}")
         made = int(db.scalar("SELECT COUNT(*) AS n FROM proposals WHERE status = 'launched' AND updated_at >= ? "
                              "AND decided_by != 'human'", (month_start(),)) or 0)
         if made >= int(v.get("max_new_orgs_per_month", 2)):
@@ -629,12 +750,23 @@ def launch_proposal(db: Database, settings: Settings, *, proposal_id: str, actor
     root = root_org(db)
     pceo = org_ceo(db, root["id"])
     cap = min(float(p["starting_budget_usd"]), float(v.get("starting_cap_usd", 50))) if actor is not None else float(p["starting_budget_usd"])
-    note = ("\n\nAlready set from this plan (measured automatically): goals 'First paying customer' and 'Revenue on plan "
+    fixes = [str(c) for c in (review.get("required_changes") or []) if str(c).strip()]
+    objections = ("\n\nThe red team's objections: solve these first (create tasks for them in your first run):\n- "
+                  + "\n- ".join(fixes)) if fixes else ""
+    note = (objections + "\n\nAlready set from this plan (measured automatically): goals 'First paying customer' and 'Revenue on plan "
             "(first 60 days)'. Add at most 3 more of your own. Watch the red team's risks: they're your early warnings.")
     oid = create_org_from_template(db, settings, template=p["template"], name=p["title"][:60], brief=proposal_brief(p) + note,
                                    parent_org_id=root["id"], supervisor_agent_id=pceo["id"],
                                    created_by=actor["id"] if actor else "human", monthly_cap_usd=cap)
     db.execute("UPDATE orgs SET status = 'trial' WHERE id = ?", (oid,))
+    funded = fund_launch(db, settings, root["id"], oid, p)
+    if funded:
+        post_message(db, settings, org_id=oid, sender_kind="system", sender_id=None, recipient_kind="agent",
+                     recipient_id=org_ceo(db, oid)["id"], type="instruction",
+                     body=(f"Your wallet has {funded / 1e6:,.2f} USD of starting capital from the venture fund. Spend it "
+                           "where it moves the business: tools, ads, and freelancers for anything agents can't do "
+                           "(hire them on Fiverr, Upwork and the like via request_purchase and the browser). The CIO "
+                           "approves each purchase."))
     if actor is None and p["redteam_verdict"] != "go":
         reason = f"owner override of red team verdict {p['redteam_verdict']}" + (f": {reason}" if reason else "")
     _seed_goals(db, settings, oid, p, review)
@@ -683,25 +815,32 @@ def research_cycle(db: Database, settings: Settings, *, force: bool = False) -> 
     root = root_org(db)
     if not root:
         return False
-    analyst = db.one("SELECT * FROM agents WHERE org_id = ? AND role = 'venture_analyst' AND status = 'active' "
-                     "ORDER BY created_at LIMIT 1", (root["id"],))
-    if not analyst:
-        return False
-    if db.one("SELECT 1 AS x FROM tasks WHERE assignee_id = ? AND status IN ('open','in_progress') AND title LIKE 'Research cycle%'",
-              (analyst["id"],)):
+    analysts = [a for a in db.all("SELECT * FROM agents WHERE org_id = ? AND role = 'venture_analyst' AND status = 'active' "
+                                  "ORDER BY created_at", (root["id"],))
+                if not db.one("SELECT 1 AS x FROM tasks WHERE assignee_id = ? AND status IN ('open','in_progress') "
+                              "AND title LIKE 'Research cycle%'", (a["id"],))]
+    if not analysts:
         return False
     set_setting(db, "ideas:last_cycle", iso())
-    from .engine import create_task
     n = int(v.get("proposals_per_cycle", 3))
+    for i, analyst in enumerate(analysts):  # every idle analyst researches in parallel, each in a different direction
+        _research_task(db, analyst, n, i, len(analysts))
+    return True
+
+
+def _research_task(db: Database, analyst: dict, n: int, i: int, of: int) -> None:
+    from .engine import create_task
+    angle = ["", "Look at markets and offers nobody on the team has proposed yet. ",
+             "Look at what's already working for small online businesses and make an agent-run version. ",
+             "Look at trends from the last 90 days. "][i % 4] if of > 1 else ""
     create_task(db, creator=None, assignee_id=analyst["id"], title=f"Research cycle: propose {n} new businesses",
                 deliverable=f"{n} complete proposals submitted with submit_proposal (scored, sourced evidence, full business case)",
-                description=("Scan markets, trends and what's working in our portfolio. Prefer B2B offers our agents can "
+                description=(angle + "Scan markets, trends and what's working in our portfolio. Prefer offers our agents can "
                              "build, sell by email and deliver themselves, with a first payment possible in 2-3 weeks and "
                              "low legal risk. Skip ideas we already proposed (list_proposals). Score honestly and use "
                              "conservative numbers in the business case: the red team will attack every one.\n\n"
                              "The owner's research parameters (stay inside them; hard limits are enforced on submit):\n"
                              + params_text(get_params(db))))
-    return True
 
 
 OWNER_IDEA = """The owner has an idea for a business. Turn it into a complete proposal with submit_proposal(source='owner'):

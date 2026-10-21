@@ -222,7 +222,8 @@ def next_videos(db: Database, src: dict, limit: int) -> list[dict]:
 
 
 def _analyst(db: Database) -> dict | None:
-    return db.one("SELECT * FROM agents WHERE role = 'venture_analyst' AND status = 'active' ORDER BY created_at LIMIT 1")
+    from .ideas import pool_agent
+    return pool_agent(db, "venture_analyst")
 
 
 async def _process(core: Any, src: dict, item: dict) -> str:

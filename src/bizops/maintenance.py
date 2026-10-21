@@ -233,6 +233,51 @@ def management_reviews(db: Database, settings: Settings) -> int:
     return n
 
 
+def trial_reviews(db: Database, settings: Settings) -> int:
+    """Keep what sticks. A business on trial whose real outreach got no reply and no payment within
+    venture.trials.judge_after_days of its first email is paused (the owner can resume it); one that got paid
+    graduates to active. The clock starts at the first real email, so nothing is judged before it could sell."""
+    from .engine import set_paused
+    t = (settings.policy.get("venture") or {}).get("trials") or {}
+    days = float(t.get("judge_after_days", 14))
+    if days <= 0:
+        return 0
+    root = root_org(db)
+    pceo = org_ceo(db, root["id"]) if root else None
+    n = 0
+    for org in db.all("SELECT * FROM orgs WHERE status = 'trial'"):
+        paid = int(db.scalar("SELECT COUNT(*) FROM payments_in WHERE org_id = ? AND sandbox = 0 AND status = 'paid'",
+                             (org["id"],)) or 0)
+        if paid:
+            db.execute("UPDATE orgs SET status = 'active', updated_at = ? WHERE id = ?", (iso(), org["id"]))
+            log_event(db, actor_kind="system", kind="system", action="trial.graduate", org_id=org["id"],
+                      result={"payments": paid}, outcome="ok")
+            if pceo:
+                _system_msg(db, settings, pceo, f"{org['name']} got its first real payment and graduated from trial to "
+                                                "active. Tell the owner, and back what works.", type="status")
+            n += 1
+            continue
+        first = db.scalar("SELECT MIN(created_at) FROM emails WHERE org_id = ? AND direction = 'out' AND status = 'sent' "
+                          "AND provider != 'sandbox'", (org["id"],))
+        if not first or (now() - parse_iso(first)).total_seconds() < days * 86400:
+            continue
+        replies = int(db.scalar("SELECT COUNT(*) FROM emails WHERE org_id = ? AND direction = 'in' AND lead_id IS NOT NULL "
+                                "AND provider != 'sandbox'", (org["id"],)) or 0)
+        if replies >= int(t.get("min_replies", 1)):
+            continue
+        sent = int(db.scalar("SELECT COUNT(*) FROM emails WHERE org_id = ? AND direction = 'out' AND status = 'sent'",
+                             (org["id"],)) or 0)
+        set_paused(db, "org", org["id"], True, actor="system")
+        log_event(db, actor_kind="system", kind="system", action="trial.cut", org_id=org["id"],
+                  result={"emails_sent": sent, "replies": replies, "days": days}, outcome="ok")
+        if pceo:
+            _system_msg(db, settings, pceo, f"{org['name']} was paused: {sent} emails over {days:g}+ days got no reply and no "
+                                            "payment. Note what you learned in the knowledge base so the next ideas avoid "
+                                            "it, and tell the owner in one line.", type="status")
+        n += 1
+    return n
+
+
 def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[str, int]:
     """One maintenance pass. Each job throttles itself; `force` runs them all now (tests, CLI)."""
     cfg = _cfg(settings)
@@ -257,7 +302,10 @@ def run_jobs(db: Database, settings: Settings, *, force: bool = False) -> dict[s
         out["goals_measured"] = business.measure_goals(db)
     if force or _due(db, "ideas", 600):
         from . import ideas
+        out["pool_agents"] = ideas.ensure_pools(db, settings)
         out["research_cycle"] = int(ideas.research_cycle(db, settings))
+        out["auto_launched"] = ideas.launch_sweep(db, settings)
+        out["trials_reviewed"] = trial_reviews(db, settings)
         out["red_team_queued"] = ideas.red_team_backlog(db, settings)
     if force or _due(db, "mgmt", 600):
         out["management_reviews"] = management_reviews(db, settings)

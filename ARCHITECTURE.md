@@ -108,10 +108,16 @@ that proxy. The public voice demo goes through `gateway.public_model_call`: kill
 per-business daily ceiling are checked BEFORE the model call.
 
 ## Ideas pipeline (ideas.py, tools/ideas.py)
-Launch bar (`ideas.launch_bar`, policy `venture.launch_rule`): agents may launch only a red-team "go" whose
-red-team score clears a bar set from its own breakdown: lower for a cheap, fast test with real month-6 upside,
-higher for legal risk, many owner-only steps, or an author far more optimistic than the red team; hard floors
-on demand, deliverability (automation_fit) and legal risk; a positive month-6 profit is always required.
+Launch many, keep what sticks (`ideas.launch_bar`, policy `venture`): a reviewed proposal launches in code
+right after review (`auto_launch`, `launch_sweep`) when it needs $500 or less to start (startup + first month),
+or is a safe bet (red team: low legal risk, few owner steps, cheap to test), or its red-team score clears a bar
+set from its breakdown. Legal risk under 2.5 never launches. The red team's verdict is a to-do list, not a veto:
+its required changes become the new CEO's first tasks; review rounds never end in "parked". Each launch gets
+its starting capital (up to $500) moved from the platform's wallet (the venture fund the owner loads) into its
+own wallet (ledger `allocation_out`/`allocation_in`); businesses hire freelancers for the human parts through
+card purchases. Trials whose real outreach gets no reply or payment within 14 days are paused; a first real
+payment graduates a trial to active (`maintenance.trial_reviews`). Venture analysts and red teamers work as
+pools (`ideas.ensure_pools`, least busy first).
 YouTube channels (`idea_sources.py`): the owner adds channels on the Ideas page and picks the order (most viewed
 first, or newest first) and how many (all, or the top N). The whole channel is listed (YouTube Data API with
 YOUTUBE_API_KEY; else yt-dlp, which covers roughly the newest 150-200 videos), then a few videos per check are

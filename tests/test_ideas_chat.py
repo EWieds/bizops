@@ -57,6 +57,7 @@ async def test_submit_scores_and_notifies_ceo(core, org):
 
 async def test_ceo_launches_within_venture_limits(core, org):
     core.settings.policy["platform"]["monthly_cap_usd"] = 1000
+    core.settings.policy["venture"]["max_new_orgs_per_month"] = 2
     c = Ctx(core=core, agent=org["pceo"])
     ids = []
     for i in range(3):

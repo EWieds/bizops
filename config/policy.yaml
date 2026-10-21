@@ -70,8 +70,8 @@ approver:
 # Card purchases (purchases.py): an agent asks, the platform's Chief Investment Officer decides, a
 # vendor-locked virtual card for exactly that amount pays. Draws only on the wallet the owner loaded.
 purchases:
-  max_per_purchase_usd: 300                 # one-time price, or monthly price of a subscription
-  max_monthly_subscriptions_usd_per_org: 300
+  max_per_purchase_usd: 500                 # one-time price, or monthly price of a subscription (e.g. a freelancer)
+  max_monthly_subscriptions_usd_per_org: 500
 
 # The agents' browser (browser.py). Headless Chromium on the server, one saved profile per business.
 browser:
@@ -141,32 +141,42 @@ sandbox:
   reply_delay_s: 45               # how long simulated prospects take to answer
 
 # Venture budget: what the platform may launch on its own.
-venture:
-  max_new_orgs_per_month: 2
-  max_on_trial: 3
+venture:                          # launch a lot, keep what sticks
+  max_new_orgs_per_month: 60
+  max_on_trial: 25
+  fund_per_launch_usd: 500        # each launch gets its startup + first month (up to this) from the platform's wallet
   starting_cap_usd: 50
   templates: [generic, voice-agent-sales, rank-and-rent, digital-products]
-  research_every_days: 3          # the venture analyst runs a research cycle on its own this often (0 = off)
-  proposals_per_cycle: 3
-  auto_launch: true               # the platform CEO may launch strong proposals itself, inside the limits above
+  research_every_days: 1          # every idle venture analyst runs a research cycle this often (0 = off)
+  proposals_per_cycle: 8          # per analyst per cycle
+  analysts: 3                     # venture analysts on the platform (they work in parallel)
+  red_teams: 2                    # red teamers (they review in parallel)
+  auto_launch: true               # agents (the platform CEO) may launch proposals that qualify, inside the limits
+  launch_in_code: true            # ...and qualifying proposals launch automatically right after review
+  trials:                         # keep what sticks (maintenance.trial_reviews)
+    judge_after_days: 14          # days after a trial's first real email; no reply and no payment by then: paused
+    min_replies: 1                # a first real payment graduates a trial to active
   youtube:                        # YouTube channels the owner adds on the Ideas page (idea_sources.py)
-    check_hours: 3                # how often videos are sent to the analyst
-    max_videos_per_check: 4       # per channel per check (new uploads first, then the backlog in the channel's order)
+    check_hours: 1                # how often videos are sent to the analysts
+    max_videos_per_check: 15      # per channel per check (new uploads first, then the backlog in the channel's order)
     list_every_hours: 24          # how often each channel's full video list is refreshed (finds new uploads)
     min_duration_s: 120           # shorter videos are skipped
     min_transcript_chars: 1500
-  launch_rule:                    # the bar the RED TEAM's weighted score (out of 5) must clear, set per proposal
-    base: 3.4                     # from its score breakdown (ideas.launch_bar), clamped to [min, max]
-    min: 2.8
-    max: 4.2
-    floors: {demand: 2.5, automation_fit: 2.5, legal_risk: 2.0}   # any of these below its floor: no launch
+  launch_rule:                    # what launches, from the RED TEAM's scores (out of 5) for each proposal
+    cheap_launch_usd: 500         # needs this much or less (startup + first month): launches whatever the score or verdict
+    safe_bet: {legal_risk: 4, owner_steps: 4, cost_to_test: 4}   # all at least this: launches whatever the score or verdict
+    base: 3.0                     # otherwise the weighted score must clear a bar set from its breakdown,
+    min: 2.5                      # clamped to [min, max]
+    max: 3.8
+    floors: {legal_risk: 2.5}     # below this (real legal trouble): never launches, cheap or not
+    require_month6_profit: false  # true: the red team must also project a month-6 profit
     cheap_fast_discount: 0.3      # bar drops up to this for a cheap, fast test (rises for a slow, costly one)
     upside_discount: 0.2          # bar drops this much when red-team month-6 profit >= upside_usd (half at 1/5 of it)
     upside_usd: 10000
     legal_premium: 0.2            # bar rises when legal_risk <= 3
     owner_steps_premium: 0.15     # bar rises when owner_steps <= 2 (lots for the owner to do)
     disagreement_premium: 0.15    # bar rises when the author scored it 0.8+ above the red team
-  red_team_max_rounds: 3          # fix -> revise cycles before a proposal is parked
+  red_team_max_rounds: 2          # fix -> revise cycles; after that it goes to a launch decision (never parked)
 
 # Quality bar: outbound work is scored against a professional rubric (0-4) before it ships, by Jev when
 # TYPESAFE_API_KEY is set, else by the cheapest Claude tier. Below the bar it is sent back with feedback.
