@@ -145,7 +145,7 @@ def create_org_from_template(db: Database, settings: Settings, *, template: str,
     if not chk.ok:
         raise PolicyRefusal(chk.rule, chk.detail)
     agent_total = sum(usd_to_micros(a.get("budget_usd", 0)) for a in tpl["agents"])
-    if agent_total > cap:
+    if agent_total > cap and budget.agent_budgets_enforced(settings) and budget.spend_caps_enforced(settings):
         raise PolicyRefusal("alloc.org", f"template agent budgets exceed org cap ({template})")
     for spec in tpl["agents"]:
         settings.role(spec["role"])  # fail early on unknown roles
