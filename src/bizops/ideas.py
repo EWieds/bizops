@@ -828,6 +828,14 @@ def research_cycle(db: Database, settings: Settings, *, force: bool = False) -> 
     return True
 
 
+ADAPT_DONT_REJECT = ("The company launches many cheap trials and keeps what sticks: anything that can start for $500 or "
+                     "less (startup + first month) launches automatically unless it is legally risky. So adapt rather "
+                     "than reject: hire freelancers (Fiverr, Upwork) for human skills, use suppliers, print-on-demand or "
+                     "dropshipping for physical goods, and scale the offer down to fit $500. Reject an idea only if it is "
+                     "illegal or harmful, or cannot be started for $500 even scaled down, and say which. Slow-to-revenue "
+                     "or human-heavy is not a reason to reject. ")
+
+
 def _research_task(db: Database, analyst: dict, n: int, i: int, of: int) -> None:
     from .engine import create_task
     angle = ["", "Look at markets and offers nobody on the team has proposed yet. ",
@@ -835,9 +843,8 @@ def _research_task(db: Database, analyst: dict, n: int, i: int, of: int) -> None
              "Look at trends from the last 90 days. "][i % 4] if of > 1 else ""
     create_task(db, creator=None, assignee_id=analyst["id"], title=f"Research cycle: propose {n} new businesses",
                 deliverable=f"{n} complete proposals submitted with submit_proposal (scored, sourced evidence, full business case)",
-                description=(angle + "Scan markets, trends and what's working in our portfolio. Prefer offers our agents can "
-                             "build, sell by email and deliver themselves, with a first payment possible in 2-3 weeks and "
-                             "low legal risk. Skip ideas we already proposed (list_proposals). Score honestly and use "
+                description=(angle + "Scan markets, trends and what's working in our portfolio. " + ADAPT_DONT_REJECT + "Skip "
+                             "ideas we already proposed (list_proposals). Score honestly and use "
                              "conservative numbers in the business case: the red team will attack every one.\n\n"
                              "The owner's research parameters (stay inside them; hard limits are enforced on submit):\n"
                              + params_text(get_params(db))))

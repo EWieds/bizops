@@ -228,6 +228,7 @@ def _analyst(db: Database) -> dict | None:
 
 async def _process(core: Any, src: dict, item: dict) -> str:
     from . import media
+    from .ideas import ADAPT_DONT_REJECT
     db, c = core.db, cfg(core.settings)
     if item.get("duration_s") and item["duration_s"] < int(c["min_duration_s"]):
         db.execute("UPDATE idea_source_items SET status = 'skipped', error = 'too short' WHERE id = ?", (item["id"],))
@@ -251,13 +252,14 @@ async def _process(core: Any, src: dict, item: dict) -> str:
     task_id = None
     if analyst:
         t = create_task(db, creator=None, assignee_id=analyst["id"], title=f"Ideas from YouTube: {clip(title, 80)}",
-                        deliverable="Every business idea in this video that fits the owner's research parameters, "
-                                    "submitted with submit_proposal (source 'youtube', source_ref the video URL) with a "
-                                    "full business case; or one line on why none qualify.",
+                        deliverable="One proposal per distinct business model in this video (adapted to start for $500 "
+                                    "or less), submitted with submit_proposal (source 'youtube', source_ref the video URL) "
+                                    "with a full business case. Only if a model is illegal/harmful or can't start for $500 "
+                                    "even scaled down: one line saying which.",
                         description=(f"The owner subscribed to the channel '{src['title']}'. Video ({views}): {meta['url']}. "
                                      f"Full transcript: read_artifact {aid}. Treat the video's claims (income, ease, "
-                                     "demand) as unverified: check them with your own research. Adapt ideas so agents "
-                                     "can deliver them end to end. The red team reviews every proposal."))
+                                     "demand) as unverified: use conservative numbers from your own research. "
+                                     + ADAPT_DONT_REJECT + "The red team reviews every proposal."))
         task_id = t["id"]
     db.execute("UPDATE idea_source_items SET status = 'sent', artifact_id = ?, task_id = ?, title = ? WHERE id = ?",
                (aid, task_id, title, item["id"]))
