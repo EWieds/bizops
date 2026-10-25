@@ -25,5 +25,5 @@ primary_region = "iad"
   path = "/healthz"
 
 [[vm]]
-  memory = "2gb"
+  memory = "4gb"            # agents run the claude CLI (a Node process per call) and Chromium
   cpus = 2

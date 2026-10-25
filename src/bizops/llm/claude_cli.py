@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import signal
 from datetime import UTC, datetime, timedelta
 import os
 import shutil
@@ -147,6 +148,9 @@ class ClaudeCLIClient:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.per_call_budget = float(settings.models.get("cli_max_usd_per_call", 2.0))
         self.timeout = float(settings.models.get("cli_timeout_s", 600))
+        # Each call is a separate Node process (~200-400 MB). Bound how many run at once, whoever asks
+        # (agent runs, quality checks, triage), so a busy portfolio can't exhaust the machine's memory.
+        self._slots = asyncio.Semaphore(int(settings.models.get("cli_max_concurrent", 6)))
 
     async def _call(self, *, prompt: str, system: str, model: str, schema: dict, tools: str = "",
                     allowed: str | None = None) -> dict[str, Any]:
@@ -157,13 +161,20 @@ class ClaudeCLIClient:
         if allowed:
             args += ["--allowedTools", allowed]
         env = cli_env()
-        proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                                                    stderr=asyncio.subprocess.PIPE, cwd=self.workdir, env=env)
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=self.timeout)
-        except TimeoutError:
-            proc.kill()
-            raise ClaudeCLIError(f"claude CLI timed out after {self.timeout}s")
+        async with self._slots:
+            # Own process group, so a timeout or cancelled run kills the CLI *and* its children, and the process is
+            # always waited for: no orphans or zombies piling up on a long-running server.
+            proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE, cwd=self.workdir, env=env,
+                                                        start_new_session=True)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=self.timeout)
+            except TimeoutError:
+                await _reap(proc)
+                raise ClaudeCLIError(f"claude CLI timed out after {self.timeout}s")
+            except BaseException:
+                await _reap(proc)
+                raise
         text = out.decode(errors="replace").strip()
         try:
             data = json.loads(text.splitlines()[-1] if text else "{}")
@@ -243,3 +254,19 @@ class ClaudeCLIClient:
         _, _, _, cost = self._usage(data)
         return SearchResult(query=query, results=(out.get("results") or [])[:max_results],
                             summary=out.get("summary", ""), cost_micros=cost, provider="claude-cli")
+
+
+async def _reap(proc: asyncio.subprocess.Process) -> None:
+    """Kill a CLI call's whole process group and wait for it, so nothing is left running or unreaped."""
+    if proc.returncode is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=10)
+    except (TimeoutError, asyncio.CancelledError):
+        pass

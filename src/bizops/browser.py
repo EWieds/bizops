@@ -123,6 +123,7 @@ class Browser:
         self.settings = settings
         self._pw: Any = None
         self._contexts: dict[str, Any] = {}           # org_id -> BrowserContext
+        self._ctx_used: dict[str, float] = {}         # org_id -> last use
         self._pages: dict[str, Any] = {}              # agent_id -> Page
         self._frames: dict[str, dict[str, Any]] = {}  # agent_id -> ref prefix -> Frame
         self._secrets: dict[str, set[str]] = {}       # agent_id -> values to redact
@@ -143,12 +144,18 @@ class Browser:
 
     async def _context(self, org_id: str) -> Any:
         if org_id in self._contexts:
+            self._ctx_used[org_id] = time.monotonic()
             return self._contexts[org_id]
+        # Each business's profile is a separate Chromium process (150-300 MB). Keep only the most recently used
+        # few open; the profile on disk keeps logins, so a closed one reopens with nothing lost.
+        while len(self._contexts) >= int(self.cfg.get("max_open_profiles", 3)):
+            oldest = min(self._contexts, key=lambda o: self._ctx_used.get(o, 0.0))
+            await self._close_context(oldest)
         if not self.installed():
             raise PolicyRefusal("browser.unavailable", "the browser isn't installed on this server "
                                                        "(pip install -e '.[browser]' and playwright's Chromium)")
-        from playwright.async_api import async_playwright
         if self._pw is None:
+            from playwright.async_api import async_playwright
             self._pw = await async_playwright().start()
         profile = Path(self.settings.data_dir) / "browser" / org_id
         profile.mkdir(parents=True, exist_ok=True)
@@ -174,7 +181,25 @@ class Browser:
 
         await ctx.route("**/*", guard)
         self._contexts[org_id] = ctx
+        self._ctx_used[org_id] = time.monotonic()
         return ctx
+
+    async def _close_context(self, org_id: str) -> None:
+        ctx = self._contexts.pop(org_id, None)
+        self._ctx_used.pop(org_id, None)
+        for aid, page in list(self._pages.items()):
+            try:
+                if page.context is ctx:
+                    self._pages.pop(aid, None)
+                    self._used.pop(aid, None)
+                    self._frames.pop(aid, None)
+            except Exception:
+                self._pages.pop(aid, None)
+        if ctx is not None:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
 
     async def _page(self, agent: dict) -> Any:
         aid = agent["id"]
@@ -350,7 +375,8 @@ class Browser:
                 "performance": perf}
 
     async def close_idle(self, max_idle_s: float = 1800) -> int:
-        """Close tabs nobody used for a while (their logins stay in the profile)."""
+        """Close tabs nobody used for a while, then whole browsers (a Chromium process per business) with no tab
+        left. Logins stay in the profile on disk."""
         n = 0
         for aid, last in list(self._used.items()):
             if time.monotonic() - last > max_idle_s:
@@ -361,6 +387,11 @@ class Browser:
                 if page is not None and not page.is_closed():
                     await page.close()
                     n += 1
+        for org_id in list(self._contexts):
+            if time.monotonic() - self._ctx_used.get(org_id, 0.0) > max_idle_s and not any(
+                    getattr(pg, "context", None) is self._contexts[org_id] for pg in self._pages.values()):
+                await self._close_context(org_id)
+                n += 1
         return n
 
     async def aclose(self) -> None:

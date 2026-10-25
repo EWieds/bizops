@@ -78,6 +78,7 @@ purchases:
 # The agents' browser (browser.py). Headless Chromium on the server, one saved profile per business.
 browser:
   action_timeout_s: 15
+  max_open_profiles: 3          # Chromium processes (one per business profile) kept open at once; least recently used closes
   max_chars_returned: 20000
   allow_private_hosts: false    # tests only: lets the browser open localhost pages
 
