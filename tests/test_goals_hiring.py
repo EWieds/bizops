@@ -40,6 +40,7 @@ def test_measurement_owner_only_and_claims(core, org):
 
 
 def test_spawn_allocates_from_hirer_budget(core, org):
+    core.settings.policy["budgets"]["agent_budgets"] = True
     before = get_agent(core.db, org["coo"]["id"])["budget_micros"]
     row = spawn_agent(core.db, core.settings, hirer=org["coo"], role="coder", budget_usd=2, focus="landing page")
     assert row["parent_agent_id"] == org["coo"]["id"] and row["depth"] == org["coo"]["depth"] + 1

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import signal
 from datetime import UTC, datetime, timedelta
 import os
 import shutil
@@ -82,6 +83,42 @@ def _reset_in(text: str) -> float:
     return (at - now).total_seconds() + 60
 
 
+def cli_env() -> dict[str, str]:
+    """Environment for the claude CLI. With a Claude token present, API keys are left out: the CLI would
+    otherwise bill the API key instead of the subscription the owner chose."""
+    drop = {"CLAUDECODE"}
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        drop |= {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+    return {k: v for k, v in os.environ.items() if k not in drop}
+
+
+async def test_token(token: str) -> str:
+    """One tiny real call with the token, so a bad token is caught on the Connect page, not by idle agents."""
+    if token.startswith("sk-ant-sid"):
+        raise RuntimeError("that's a claude.ai browser session key, not a Claude Code token. On your computer run "
+                           "`claude setup-token` and paste the token it prints (it starts with sk-ant-oat01-). "
+                           "Then log out of claude.ai once to invalidate the session key you pasted.")
+    if not token.startswith("sk-ant-oat"):
+        raise RuntimeError("a Claude token from `claude setup-token` starts with sk-ant-oat01-")
+    binary = find_claude()
+    if not binary:
+        raise RuntimeError("the claude CLI isn't installed on this server")
+    env = {**cli_env(), "CLAUDE_CODE_OAUTH_TOKEN": token}
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    proc = await asyncio.create_subprocess_exec(binary, "-p", "Reply with just: ok", "--output-format", "json",
+                                                "--no-session-persistence", stdout=asyncio.subprocess.PIPE,
+                                                stderr=asyncio.subprocess.PIPE, env=env)
+    out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+    try:
+        data = json.loads(out or b"{}")
+    except ValueError:
+        data = {}
+    if data.get("is_error") or proc.returncode:
+        raise RuntimeError(f"Claude rejected the token: {str(data.get('result') or err.decode()[:200]).strip()}")
+    return "Claude token works."
+
+
 def find_claude() -> str | None:
     return shutil.which("claude") or next(
         (str(p) for p in (Path.home() / ".claude/local/claude", Path("/usr/local/bin/claude")) if p.exists()), None)
@@ -111,6 +148,9 @@ class ClaudeCLIClient:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.per_call_budget = float(settings.models.get("cli_max_usd_per_call", 2.0))
         self.timeout = float(settings.models.get("cli_timeout_s", 600))
+        # Each call is a separate Node process (~200-400 MB). Bound how many run at once, whoever asks
+        # (agent runs, quality checks, triage), so a busy portfolio can't exhaust the machine's memory.
+        self._slots = asyncio.Semaphore(int(settings.models.get("cli_max_concurrent", 6)))
 
     async def _call(self, *, prompt: str, system: str, model: str, schema: dict, tools: str = "",
                     allowed: str | None = None) -> dict[str, Any]:
@@ -120,14 +160,21 @@ class ClaudeCLIClient:
                 "--max-budget-usd", str(self.per_call_budget)]
         if allowed:
             args += ["--allowedTools", allowed]
-        env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE",)}
-        proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                                                    stderr=asyncio.subprocess.PIPE, cwd=self.workdir, env=env)
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=self.timeout)
-        except TimeoutError:
-            proc.kill()
-            raise ClaudeCLIError(f"claude CLI timed out after {self.timeout}s")
+        env = cli_env()
+        async with self._slots:
+            # Own process group, so a timeout or cancelled run kills the CLI *and* its children, and the process is
+            # always waited for: no orphans or zombies piling up on a long-running server.
+            proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE, cwd=self.workdir, env=env,
+                                                        start_new_session=True)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=self.timeout)
+            except TimeoutError:
+                await _reap(proc)
+                raise ClaudeCLIError(f"claude CLI timed out after {self.timeout}s")
+            except BaseException:
+                await _reap(proc)
+                raise
         text = out.decode(errors="replace").strip()
         try:
             data = json.loads(text.splitlines()[-1] if text else "{}")
@@ -207,3 +254,19 @@ class ClaudeCLIClient:
         _, _, _, cost = self._usage(data)
         return SearchResult(query=query, results=(out.get("results") or [])[:max_results],
                             summary=out.get("summary", ""), cost_micros=cost, provider="claude-cli")
+
+
+async def _reap(proc: asyncio.subprocess.Process) -> None:
+    """Kill a CLI call's whole process group and wait for it, so nothing is left running or unreaped."""
+    if proc.returncode is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=10)
+    except (TimeoutError, asyncio.CancelledError):
+        pass

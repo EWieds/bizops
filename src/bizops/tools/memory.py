@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..db import insert
-from ..engine import PolicyRefusal
+from ..engine import PolicyRefusal, org_filter
 from ..util import iso, new_id
 from . import Ctx, tool
 
@@ -63,10 +63,18 @@ async def kb_write(ctx: Ctx, args: dict) -> dict:
 
 
 @tool("kb_read", grant="memory", action_class="internal",
-      description="Read the org knowledge base (all keys, or one entry).", properties={"key": {"type": "string"}})
+      description="Read the org knowledge base (all keys, or one entry). A key not in your org is looked up in "
+                  "the platform's knowledge base (and, for platform executives, every business's).",
+      properties={"key": {"type": "string"}})
 async def kb_read(ctx: Ctx, args: dict) -> list:
     if args.get("key"):
-        return ctx.db.all("SELECT key, body, updated_at FROM memory_notes WHERE org_id = ? AND agent_id IS NULL "
+        rows = ctx.db.all("SELECT key, body, updated_at FROM memory_notes WHERE org_id = ? AND agent_id IS NULL "
                           "AND key = ?", (ctx.agent["org_id"], args["key"]))
+        if rows:
+            return rows
+        where, params = org_filter(ctx.db, ctx.agent, "m.org_id")
+        return ctx.db.all("SELECT m.key, m.body, m.updated_at, o.name AS org FROM memory_notes m JOIN orgs o ON o.id = m.org_id "
+                          f"WHERE m.agent_id IS NULL AND m.key = ? AND {where} ORDER BY m.updated_at DESC LIMIT 5",
+                          (args["key"], *params))
     return ctx.db.all("SELECT key, substr(body, 1, 200) AS preview, updated_at FROM memory_notes "
                       "WHERE org_id = ? AND agent_id IS NULL ORDER BY key", (ctx.agent["org_id"],))

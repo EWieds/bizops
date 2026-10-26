@@ -3,6 +3,9 @@
 Kinds and who may write them:
   model_cost, spend       system (gateway) only
   payment, payment_reversal   the pay tool via the payment provider
+  purchase, purchase_refund   CIO-approved card purchases (purchases.py). They draw on the wallet the
+                          owner loaded, not on the model/ops budget, so they are not counted in spent()
+  allocation_out, allocation_in   system: the venture fund (the platform's wallet) seeding a new business's wallet
   deposit                 human only (owner funds an org wallet)
   revenue                 connector or human only (or the sandbox, kept separate); agents can never write it
   revenue_reversal        refunds and chargebacks, same writers as revenue; revenue() is always net of them
@@ -23,7 +26,11 @@ ALLOWED_SOURCES = {
     "spend": {"system", "tool"},
     "payment": {"provider"},
     "payment_reversal": {"provider", "human"},
+    "purchase": {"provider"},
+    "purchase_refund": {"provider", "human"},
     "deposit": {"human"},
+    "allocation_out": {"system"},
+    "allocation_in": {"system"},
     "revenue": {"connector", "human", "sandbox"},
     "revenue_reversal": {"connector", "human", "sandbox"},
 }
@@ -79,10 +86,21 @@ def spent(target: Database | sqlite3.Connection, *, since: str, org_id: str | No
 
 
 def wallet_balance(target: Database | sqlite3.Connection, org_id: str) -> int:
-    sql = ("SELECT COALESCE(SUM(CASE WHEN kind IN ('deposit','payment_reversal') THEN amount_micros "
-           "WHEN kind = 'payment' THEN -amount_micros ELSE 0 END), 0) "
+    sql = ("SELECT COALESCE(SUM(CASE WHEN kind IN ('deposit','payment_reversal','purchase_refund','allocation_in') "
+           "THEN amount_micros WHEN kind IN ('payment','purchase','allocation_out') THEN -amount_micros ELSE 0 END), 0) "
            "FROM ledger_entries WHERE org_id = ?")
     return _q(target, sql, (org_id,))
+
+
+def purchases_since(target: Database | sqlite3.Connection, org_id: str | None, since: str) -> int:
+    """Net card purchases since a timestamp (all orgs when org_id is None)."""
+    sql = ("SELECT COALESCE(SUM(CASE WHEN kind = 'purchase' THEN amount_micros "
+           "WHEN kind = 'purchase_refund' THEN -amount_micros ELSE 0 END), 0) FROM ledger_entries WHERE ts >= ?")
+    params: tuple = (since,)
+    if org_id:
+        sql += " AND org_id = ?"
+        params = (since, org_id)
+    return _q(target, sql, params)
 
 
 def payments_since(target: Database | sqlite3.Connection, org_id: str, since: str) -> int:

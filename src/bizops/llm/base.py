@@ -19,6 +19,22 @@ class LLMRateLimited(RuntimeError):
         self.retry_after_s = retry_after_s
 
 
+class LLMOutOfCredit(LLMRateLimited):
+    """The provider account has no credit left (e.g. Anthropic 'credit balance is too low'). Every agent would
+    fail the same way, so everyone pauses and the owner gets one item to top up."""
+
+    def __init__(self, msg: str, retry_after_s: float = 900):
+        super().__init__(msg, retry_after_s)
+
+
+CREDIT_ERROR = ("credit balance is too low", "insufficient credit", "payment required")
+
+
+def is_credit_error(text: str) -> bool:
+    t = text.lower()
+    return any(k in t for k in CREDIT_ERROR)
+
+
 @dataclass
 class LLMResponse:
     content: list[dict[str, Any]]

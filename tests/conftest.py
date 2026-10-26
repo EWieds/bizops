@@ -20,7 +20,8 @@ def clean_env():
 @pytest.fixture
 def settings(tmp_path):
     return Settings.load(home=tmp_path, db_path=tmp_path / "t.db", dry_run=True,
-                         policy={"sandbox": {"reply_delay_s": 0}, "venture": {"research_every_days": 0},
+                         policy={"budgets": {"spend_caps": True}, "sandbox": {"reply_delay_s": 0},
+                                 "venture": {"research_every_days": 0, "launch_in_code": False, "analysts": 1, "red_teams": 1},
                                  "heartbeats": {"maintenance_every_s": 0, "inbound_every_s": 0}})
 
 

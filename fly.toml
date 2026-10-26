@@ -25,5 +25,6 @@ primary_region = "iad"
   path = "/healthz"
 
 [[vm]]
-  memory = "2gb"
+  cpu_kind = "performance"  # shared CPUs get throttled (93% steal seen live) under many claude CLI calls
+  memory = "4gb"            # agents run the claude CLI (a Node process per call) and Chromium
   cpus = 2

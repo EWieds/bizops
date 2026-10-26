@@ -3,7 +3,8 @@
 Read ARCHITECTURE.md first. PLAN.md has the milestone plan and schema.
 
 ## Commands
-- Install: `uv venv && uv pip install -e '.[dev]'` (or `pip install -e '.[dev]'`)
+- Install: `uv venv && uv pip install -e '.[dev,browser]'` (or `pip install -e '.[dev,browser]'`); the agents' browser
+  also needs Chromium: `python -m playwright install chromium` (or set BIZOPS_CHROMIUM to a Chromium binary)
 - Tests: `.venv/bin/python -m pytest -q`
 - Server, no tokens spent: `.venv/bin/bizops serve --dry-run` -> http://127.0.0.1:8000
 - Server, live: `.venv/bin/bizops serve` (auto-detects model access: API key -> Claude login via `claude` CLI -> dry run)
@@ -16,6 +17,8 @@ Read ARCHITECTURE.md first. PLAN.md has the milestone plan and schema.
 - Run the scheduler until idle (no server): `.venv/bin/bizops tick --dry-run`
 - Kill switches: `bizops pause all|org <id>|agent <id>`, `bizops resume ...`
 - Owner money: `bizops fund <org_id> <usd>`, `bizops payee "<name>" --org <id> --max 25`
+- Purchases (agent asks, CIO decides, vendor-locked card pays) live in purchases.py + cards.py; the agents'
+  browser in browser.py. Both are tools in tools/purchases.py and tools/browser.py.
 
 ## Where things live
 - Expert role personas: config/roles.yaml. Org templates (org charts): config/templates/*.yaml.

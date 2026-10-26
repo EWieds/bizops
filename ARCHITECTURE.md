@@ -108,6 +108,21 @@ that proxy. The public voice demo goes through `gateway.public_model_call`: kill
 per-business daily ceiling are checked BEFORE the model call.
 
 ## Ideas pipeline (ideas.py, tools/ideas.py)
+Launch many, keep what sticks (`ideas.launch_bar`, policy `venture`): a reviewed proposal launches in code
+right after review (`auto_launch`, `launch_sweep`) when it needs $500 or less to start (startup + first month),
+or is a safe bet (red team: low legal risk, few owner steps, cheap to test), or its red-team score clears a bar
+set from its breakdown. Legal risk under 2.5 never launches. The red team's verdict is a to-do list, not a veto:
+its required changes become the new CEO's first tasks; review rounds never end in "parked". Each launch gets
+its starting capital (up to $500) moved from the platform's wallet (the venture fund the owner loads) into its
+own wallet (ledger `allocation_out`/`allocation_in`); businesses hire freelancers for the human parts through
+card purchases. Trials whose real outreach gets no reply or payment within 14 days are paused; a first real
+payment graduates a trial to active (`maintenance.trial_reviews`). Venture analysts and red teamers work as
+pools (`ideas.ensure_pools`, least busy first).
+YouTube channels (`idea_sources.py`): the owner adds channels on the Ideas page and picks the order (most viewed
+first, or newest first) and how many (all, or the top N). The whole channel is listed (YouTube Data API with
+YOUTUBE_API_KEY; else yt-dlp, which covers roughly the newest 150-200 videos), then a few videos per check are
+sent to the venture analyst (transcript saved as an artifact, plus a task to turn it into proposals that go
+through the red team). New uploads jump the queue; shorts are skipped.
 maintenance runs research_cycle every venture.research_every_days: it tasks the venture analyst, who
 submits proposals (submit_proposal: weighted 1-5 scores, sourced evidence, plan, kill criteria; duplicates
 refused) with a full business case: price + model + sourced competitor prices, exactly who the first 10
@@ -162,7 +177,8 @@ Model calls get the same treatment (`llm.call`): kill switch + budget checked be
 cost written to the ledger after.
 
 ## Safety model
-- Caps/budgets are code, set in `config/policy.yaml`. Agents cannot raise them; v0 cap-raise rule in
+- Caps/budgets are code, set in `config/policy.yaml`. Per-agent monthly budgets are off by default
+  (`budgets.agent_budgets`): agents are limited by their org's monthly cap and the platform caps. Agents cannot raise them; v0 cap-raise rule in
   `policy.max_allowed_cap` (2 profitable months, +25%/month max, hard ceiling).
 - Agents never see secrets. Tools read credentials via `Settings.secret()`.
 - Internet (`webclient.py`): async httpx, shared pool, concurrency limit, timeouts, byte caps, cache,
@@ -172,7 +188,31 @@ cost written to the ledger after.
   payee, per-payment max, payee max, daily org max, wallet balance and budget atomically, needs a memo
   and a task, passes the approver, is idempotent, and reverses on provider failure. Provider is
   `sandbox` until a real one is plugged in.
-- Messages: peers only within an org (plus direct supervisor/report edges), hop limit, TTL.
+- Purchases (`purchases.py`, `cards.py`, `tools/purchases.py`): an agent with the money grant asks to buy
+  a tool or subscription (vendor, item, price, once/monthly, why). Refused in code above the per-purchase
+  limit, the per-business subscription limit, or what the wallet has left after other pending requests.
+  The platform's Chief Investment Officer decides (`decide_purchase`), or the owner on the Money page;
+  nobody decides their own request. Approval debits the wallet (ledger kind `purchase`, not counted as
+  model/ops spend) and issues one virtual card (Privacy.com, or `sandbox`) locked to the vendor with a
+  limit of exactly the approved amount, so the issuer enforces the limit too. Monthly purchases are
+  debited every 30 days; when the wallet can't cover it the card is paused until the owner adds money.
+- Browser (`browser.py`, `tools/browser.py`): headless Chromium (Playwright) on the server, one
+  persistent profile per business (logins survive), one tab per agent. Pages come back as text with
+  numbered element refs (iframes too, for checkout card fields). Navigations pass the same SSRF guard as
+  fetch_url. Secrets are typed through placeholders, `{{card:<purchase>:number}}` and
+  `{{login:<name>:password}}`, resolved at the last moment and redacted from everything returned and
+  logged. `save_login` generates passwords the model never sees. Mail to `mailbox+<business-slug>@domain`
+  is stored as account mail (`read_account_mail`) for verification codes. Steps only a person can do
+  (CAPTCHA, a code to the owner's phone, ID checks) go to the owner's queue as `browser_assist`; the
+  owner's note (e.g. the code) comes back to the agent, whose tab is still open.
+- Owner setup is one item (`owner_setup.py`): any hard stop about a platform connection (Stripe, the
+  mailbox) folds into a single queue item for all businesses and never blocks a task; identical asks are
+  never filed twice; when the connection works the item closes itself and every waiting agent is told.
+  Agents see what's connected (and their business's email address) in every wake-up context.
+- Bottleneck guard (`maintenance.bottleneck_checks`): any refusal rule that blocks agents 5+ times in 24h
+  becomes an audit finding with examples, so the cause is fixed in code (tool, grant, route), not prompts.
+- Messages: agents may name recipients by role or name ('ceo', 'cio'); the gateway resolves it. Business
+  CEOs and the platform's executives may message each other directly. Otherwise peers only within an org (plus direct supervisor/report edges), hop limit, TTL.
 - Revenue/metrics are written only by connectors or the owner (ledger source rules).
 - Kill switches: platform, org, agent. Dashboard buttons + `bizops pause`.
 

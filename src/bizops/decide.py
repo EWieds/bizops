@@ -246,13 +246,53 @@ async def _critique(core, org_id: str, kind: str, state: dict, ask: str, rubric:
     return str(data.get("fix") or "").strip()
 
 
+ART_REF = re.compile(r"\bart_[0-9a-f]{12,}\b")
+PROP_REF = re.compile(r"\bprop_[0-9a-f]{12,}\b")
+KB_REF = re.compile(r"\bKB(?:\s+(?:entry|key|note))?\s*[:'\"`(]?\s*([A-Za-z0-9_][A-Za-z0-9_.\-]{2,79})")
+
+
+def referenced_work(core, result: str, limit_chars: int = 6000) -> dict[str, str]:
+    """The files and knowledge-base entries a result points to ("see art_..", "KB gbp_offer_v2"), so the
+    gate judges the work itself rather than a one-line pointer to it."""
+    db, out, budget = core.db, {}, limit_chars
+    for aid in dict.fromkeys(ART_REF.findall(result)):
+        row = db.one("SELECT name, path FROM artifacts WHERE id = ?", (aid,))
+        if row and budget > 0:
+            try:
+                text = (core.settings.artifacts_dir / row["path"]).read_text(errors="replace")
+            except OSError:
+                continue
+            out[f"{aid} ({row['name']})"] = clip(text, min(3000, budget))
+            budget -= len(out[f"{aid} ({row['name']})"])
+    for pid in dict.fromkeys(PROP_REF.findall(result)):
+        row = db.one("SELECT * FROM proposals WHERE id LIKE ? ORDER BY id LIMIT 1", (pid + "%",))
+        if row and budget > 0:
+            fields = {k: row.get(k) for k in ("title", "status", "summary", "offer", "total_score", "review_round",
+                                               "redteam_verdict", "redteam_score", "created_at")}
+            out[f"proposal {pid}"] = clip(json.dumps(fields, default=str) + "\nred team: " + str(row.get("redteam_json") or "")[:1500],
+                                          min(2500, budget))
+            budget -= len(out[f"proposal {pid}"])
+    for key in dict.fromkeys(KB_REF.findall(result)):
+        row = db.one("SELECT body FROM memory_notes WHERE agent_id IS NULL AND key = ? ORDER BY updated_at DESC LIMIT 1",
+                     (key.rstrip(".,;)"),))
+        if row and budget > 0:
+            out[f"KB {key}"] = clip(row["body"], min(3000, budget))
+            budget -= len(out[f"KB {key}"])
+    return out
+
+
 async def deliverable_check(core, *, org_id: str, deliverable: str, result: str) -> Decision | None:
     from .engine import PolicyRefusal
     q = core.settings.policy.get("quality", {})
     if not q.get("enabled", True) or not result.strip():
         return None
-    d = await core.decider.noul({"deliverable": deliverable, "reported_result": clip(result, 4000)},
-                                "Does the reported result actually satisfy the deliverable (not just describe a plan to do it)?")
+    payload = {"deliverable": deliverable, "reported_result": clip(result, 4000)}
+    evidence = referenced_work(core, result)
+    if evidence:
+        payload["referenced_work"] = evidence
+    d = await core.decider.noul(payload, "Does the reported result actually satisfy the deliverable (not just describe a "
+                                         "plan to do it)? referenced_work holds the files and knowledge-base entries the "
+                                         "result points to: judge them as the work.")
     charge(core.db, org_id, d, "quality:deliverable")
     if d.value < float(q.get("deliverable_min", 0.35)) and d.confidence >= 0.3:
         raise PolicyRefusal("quality.deliverable", f"the result doesn't meet the deliverable yet (p={d.value:.2f}, {d.source}). "

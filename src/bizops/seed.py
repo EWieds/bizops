@@ -13,10 +13,14 @@ monthly fee. Keep spend tiny until we see real leads."""
 
 def ensure_platform(core: Core) -> str:
     root = root_org(core.db)
+    from .ideas import ensure_pools
     if root:
         ensure_red_team(core.db, core.settings, root["id"])
+        ensure_pools(core.db, core.settings)
         return root["id"]
-    return create_org_from_template(core.db, core.settings, template="platform", created_by="system")
+    rid = create_org_from_template(core.db, core.settings, template="platform", created_by="system")
+    ensure_pools(core.db, core.settings)
+    return rid
 
 
 def ensure_red_team(db, settings, root_id: str) -> None:

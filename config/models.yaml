@@ -30,3 +30,4 @@ dry_run_simulated_pricing: [2.00, 10.00]
 backend: auto
 cli_max_usd_per_call: 2.0      # hard stop per model call when using the claude CLI
 cli_timeout_s: 600
+cli_max_concurrent: 6       # claude CLI processes at once (each is a Node process; bounds memory)

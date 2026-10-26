@@ -103,22 +103,27 @@ def test_owner_ideas_get_the_hardest_review(core, org):
     with pytest.raises(PolicyRefusal) as e:
         red_team(core, p["id"], counter_evidence=[{"claim": "c", "source_url": "https://example.com"}])
     assert "at least 2" in e.value.detail
-    red_team(core, p["id"], verdict="no_go")
+    red_team(core, p["id"], verdict="no_go", revised_scores={**{k: 4 for k in ideas.SCORE_WEIGHTS}, "legal_risk": 2})
     msg = core.db.one("SELECT body FROM messages WHERE body LIKE 'Reviewed proposal%' ORDER BY created_at DESC")
     assert "parked" in msg["body"] and "owner's own idea" in msg["body"]
 
 
+EXPENSIVE = copy.deepcopy(DEMO_CASE) | {"costs": {"startup_usd": 4000, "monthly_usd": 900,
+                                                  "breakdown": [{"item": "inventory", "usd": 4000}]}}
+MEDIOCRE = {**{k: 3 for k in ideas.SCORE_WEIGHTS}, "demand": 2, "time_to_revenue": 2}  # below its bar, not a safe bet
+
+
 def test_fix_revise_loop_and_round_limit(core, org):
     core.settings.policy["venture"]["red_team_max_rounds"] = 2
-    p = submit(core)
-    red_team(core, p["id"], verdict="fix")
+    p = submit(core, business_case=EXPENSIVE)
+    red_team(core, p["id"], verdict="fix", revised_scores=MEDIOCRE)
     assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (p["id"],)) == "revising"
     assert core.db.one("SELECT 1 AS x FROM messages WHERE recipient_id = ? AND body LIKE '%Required changes: cut the reply-rate%'",
                        (analyst(core)["id"],))
     with pytest.raises(PolicyRefusal):  # a fix verdict without the changes is refused
         p2 = submit(core, title="Other")
         red_team(core, p2["id"], verdict="fix", required_changes=[])
-    case = copy.deepcopy(DEMO_CASE)
+    case = copy.deepcopy(EXPENSIVE)
     case["acquisition"]["channels"][0]["expected_conversion_pct"] = 1
     with pytest.raises(PolicyRefusal):
         ideas.revise_proposal(core.db, core.settings, author=analyst(core), proposal_id=p["id"], fields={}, response="")
@@ -127,8 +132,14 @@ def test_fix_revise_loop_and_round_limit(core, org):
     assert r["status"] == "red_team" and r["review_round"] == 2
     task = core.db.one("SELECT * FROM tasks WHERE title LIKE ? ORDER BY created_at DESC", (f"Red-team {p['id']}%",))
     assert "Cut conversion to 1%" in task["description"] and "round 2" in task["description"]
-    red_team(core, p["id"], verdict="fix")  # out of rounds: parked, not looped forever
-    assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (p["id"],)) == "parked"
+    red_team(core, p["id"], verdict="fix", revised_scores=MEDIOCRE)  # out of rounds: to a launch decision, not parked
+    assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (p["id"],)) == "new"
+
+
+def test_fix_that_clears_its_bar_skips_the_revise_loop(core, org):
+    p = submit(core)  # cheap: $65 to start
+    red_team(core, p["id"], verdict="fix")
+    assert core.db.scalar("SELECT status FROM proposals WHERE id = ?", (p["id"],)) == "new"
 
 
 # ---------------------------------------------------------------- launching
@@ -143,18 +154,20 @@ async def test_agents_launch_only_what_survives(core, org):
     unreviewed = submit(core, title="Unreviewed")
     r = await approve(unreviewed["id"])
     assert not r.ok and "red team" in r.content
-    nogo = submit(core, title="No go")
-    red_team(core, nogo["id"], verdict="no_go")
+    nogo = submit(core, title="No go", business_case=EXPENSIVE)
+    red_team(core, nogo["id"], verdict="no_go", revised_scores=MEDIOCRE)
     assert not (await approve(nogo["id"])).ok
-    weak = submit(core, title="Weak")
-    red_team(core, weak["id"], revised_scores={k: 2 for k in ideas.SCORE_WEIGHTS})  # author said 4s; the red team says 2s
+    weak = submit(core, title="Weak", business_case=EXPENSIVE)
+    red_team(core, weak["id"], revised_scores={**{k: 2 for k in ideas.SCORE_WEIGHTS}, "legal_risk": 3})  # author said 4s
     r = await approve(weak["id"])
-    assert not r.ok and "red-team score" in r.content
-    loss = submit(core, title="Loss maker")
-    red_team(core, loss["id"], revised_projection={"time_to_first_revenue_days": 30, "month3_profit_usd": -50,
-                                                   "month6_profit_usd": -10})
-    r = await approve(loss["id"])
-    assert not r.ok and "month 6" in r.content
+    assert not r.ok and "launch bar" in r.content
+    risky = submit(core, title="Legally risky")  # cheap, but legal risk always blocks
+    red_team(core, risky["id"], revised_scores={**{k: 4 for k in ideas.SCORE_WEIGHTS}, "legal_risk": 2})
+    r = await approve(risky["id"])
+    assert not r.ok and "proposal.floor" in r.content
+    cheap_nogo = submit(core, title="Cheap no-go")  # $65 to start: worth a try whatever the verdict
+    red_team(core, cheap_nogo["id"], verdict="no_go", revised_scores=MEDIOCRE)
+    assert (await approve(cheap_nogo["id"])).ok
     good = submit(core, title="Good")
     red_team(core, good["id"])
     r = await approve(good["id"])

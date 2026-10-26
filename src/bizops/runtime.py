@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 from . import ledger
@@ -104,6 +105,15 @@ def system_prompt(core: Core, agent: dict, org: dict) -> str:
     return "\n\n".join(parts)
 
 
+def _note_is_stale(goal: dict) -> bool:
+    """A progress note that never mentions the current measured number (e.g. says '0 leads' when 12 are measured)."""
+    v, note = goal.get("measured_value"), goal.get("progress_note") or ""
+    if v is None or not note:
+        return False
+    shown = f"{v:g}" if isinstance(v, float) else str(v)
+    return re.search(rf"(?<![\d.]){re.escape(shown)}(?![\d])", note) is None
+
+
 def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str, Any], list[str]]:
     """Builds the wake-up message. Marks delivered messages read. Returns (text, json, msg_ids)."""
     db = core.db
@@ -149,7 +159,9 @@ def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str,
         measured = "not measured yet" if x["measured_value"] is None else f"{x['measured_value']} {x['unit']}"
         lines.append(f"- [{x['id']}] {x['title']} | metric: {x['metric']} | target {x['target']} {x['unit']} | "
                      f"measured: {measured} | due {x['due_at'][:10]} | {x['status']} | next review {x['next_review_at'][:16]}"
-                     + (f" | last note: {clip(x['progress_note'], 200)}" if x["progress_note"] else ""))
+                     + (f" | last note: {clip(x['progress_note'], 200)}" if x["progress_note"] else "")
+                     + (" | YOUR NOTE DOESN'T MATCH THE MEASURED VALUE: rewrite it from the measurement"
+                        if _note_is_stale(x) else ""))
     if not goals:
         lines.append("- (none)" + (" - set some with set_goal" if "goals" in g else ""))
     if org_level:
@@ -176,10 +188,26 @@ def gather_context(core: Core, agent: dict, reason: str) -> tuple[str, dict[str,
                      "and delete stale notes with note_delete this run.")
     if kb:
         lines.append("Org knowledge base keys: " + ", ".join(k["key"] for k in kb))
+    if agent["role"] in ("platform_ceo", "platform_coo"):
+        from .status import portfolio_text
+        lines.append("\n## Each business today (measured from the logs, UTC day; quote these, not reports)\n"
+                     + portfolio_text(db))
     if agent["role"] in ("venture_analyst", "red_team", "platform_ceo"):
         from .ideas import get_params, params_text
         lines.append("\n## The owner's research parameters (for new business ideas)\n" + params_text(get_params(db)))
-    lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} of {fmt_usd(agent['budget_micros'])} this month")
+    from .owner_setup import status_lines
+    lines.append("\n## Platform setup (the owner's side; never file it)\n" + "\n".join(status_lines(core, agent["org_id"])))
+    from .budget import agent_budgets_enforced
+    if agent_budgets_enforced(core.settings):
+        lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} of {fmt_usd(agent['budget_micros'])} this month")
+    else:
+        org_spent = ledger.spent(db, since=month_start(), org_id=agent["org_id"])
+        org = db.one("SELECT monthly_cap_micros FROM orgs WHERE id = ?", (agent["org_id"],)) or {"monthly_cap_micros": 0}
+        from .budget import spend_caps_enforced
+        cap = (f"of its {fmt_usd(org['monthly_cap_micros'])} monthly cap" if spend_caps_enforced(core.settings)
+               else "(no spending cap)")
+        lines.append(f"\n## Budget\n- you have spent {fmt_usd(spent)} this month (no personal cap); your org has spent "
+                     f"{fmt_usd(org_spent)} {cap}. Spend where it pays.")
     if "money" in g:
         lines.append(f"- org wallet: {fmt_usd(ledger.wallet_balance(db, agent['org_id']))}")
         for p in payees:
@@ -237,6 +265,30 @@ async def route_model(core: Core, agent: dict, model: str, context: str) -> tupl
     if TIER_ORDER.index(target) >= TIER_ORDER.index(own):
         return model, None
     return core.settings.models["tiers"][target], f"{own}->{target} ({d.source})"
+
+
+REQUEUE_STATUSES = ("error", "rate_limited", "stopped", "budget")
+OWNER_REPLY_TOOLS = ("reply_human",)
+
+
+async def run_turn(ctx: Ctx, uses: list[dict]) -> list:
+    """Run one model turn's tool calls. Replies to the owner go last, after everything else in the turn has
+    actually happened, and carry an automatic note if any of those actions was refused or failed, so an agent
+    can never tell the owner 'done' about something the system just refused."""
+    order = [i for i, u in enumerate(uses) if u["name"] not in OWNER_REPLY_TOOLS]
+    replies = [i for i, u in enumerate(uses) if u["name"] in OWNER_REPLY_TOOLS]
+    results: list = [None] * len(uses)
+    done = await asyncio.gather(*(invoke(ctx, uses[i]["name"], uses[i].get("input") or {}) for i in order))
+    for i, r in zip(order, done):
+        results[i] = r
+    failed = [(uses[i]["name"], r) for i, r in zip(order, done) if not r.ok]
+    for i in replies:
+        args = dict(uses[i].get("input") or {})
+        if failed and isinstance(args.get("text"), str):
+            notes = "; ".join(f"{name}: {clip(r.content, 220)}" for name, r in failed)
+            args["text"] += f"\n\n(System check: in the same step, this did not go through: {notes})"
+        results[i] = await invoke(ctx, uses[i]["name"], args)
+    return results
 
 
 async def run_agent(core: Core, agent_id: str, reason: str = "manual") -> str | None:
@@ -306,7 +358,7 @@ async def run_agent(core: Core, agent_id: str, reason: str = "manual") -> str | 
                     continue
                 summary = resp.text or None
                 break
-            results = await asyncio.gather(*(invoke(ctx, u["name"], u.get("input") or {}) for u in uses))
+            results = await run_turn(ctx, uses)
             cost += sum(r.cost_micros for r in results)
             messages.append({"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": u["id"], "content": r.content or "(empty)",
@@ -320,6 +372,12 @@ async def run_agent(core: Core, agent_id: str, reason: str = "manual") -> str | 
     except Exception as e:
         status, error = "error", f"{type(e).__name__}: {clip(str(e), 500)}"
     finally:
+        if status in REQUEUE_STATUSES and msg_ids and turns == 0:
+            # The run died before the agent could act on its inbox (provider outage, credits, a crash): put the messages
+            # back, so nothing the owner or a colleague sent is silently lost.
+            marks = ",".join("?" for _ in msg_ids)
+            db.execute(f"UPDATE messages SET status = 'unread', read_at = NULL WHERE id IN ({marks})", tuple(msg_ids))
+            db.execute("UPDATE agents SET wake_requested_at = ? WHERE id = ?", (iso(), agent_id))
         with db.tx() as conn:
             conn.execute("UPDATE runs SET status = ?, turns = ?, input_tokens = ?, output_tokens = ?, cost_micros = ?, "
                          "summary = ?, error = ?, ended_at = ? WHERE id = ?",

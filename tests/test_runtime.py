@@ -21,6 +21,7 @@ async def test_turn_limit(core, org):
 
 
 async def test_budget_stops_run_mid_way(core, org):
+    core.settings.policy["budgets"]["agent_budgets"] = True
     core.db.execute("UPDATE agents SET budget_micros = 0 WHERE id = ?", (org["ceo"]["id"],))
     human_message(core.db, core.settings, org["ceo"]["id"], "hi")
     rid = await run_agent(core, org["ceo"]["id"], "message")

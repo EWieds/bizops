@@ -17,9 +17,9 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from . import budget, ledger
+from . import budget, ledger, owner_setup
 from .db import insert
-from .engine import PolicyRefusal, get_agent, get_org, is_runnable
+from .engine import PolicyRefusal, get_agent, get_org, is_runnable, resolve_agent_ref
 from .events import log_event
 from .llm.base import LLMRateLimited, LLMResponse, price_micros, response_cost
 from .policy import ALLOW, BLOCK, HARD_STOP, check_action
@@ -51,6 +51,27 @@ def _as_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     return json.dumps(content, default=str, ensure_ascii=False)
+
+
+# Arguments that name an agent: agents often write a role or a name ('ceo') instead of the id.
+AGENT_REF_ARGS = {"message": ("to",), "create_task": ("assignee",), "request_review": ("reviewer",),
+                  "retire_agent": ("agent_id",), "team_report": ("agent_id",), "set_goal": ("owner",)}
+NO_VALUE = {"", "none", "null", "n/a", "na", "-", "nil", "undefined"}
+
+
+def _normalize_args(ctx: Ctx, name: str, args: dict) -> None:
+    """Placeholder ids ('none') mean "not given"; role or name references become agent ids."""
+    for k in [k for k, v in args.items() if (k.endswith("_id") or k == "in_reply_to") and isinstance(v, str)
+              and v.strip().lower() in NO_VALUE]:
+        args.pop(k)
+    for k in AGENT_REF_ARGS.get(name, ()):
+        if isinstance(args.get(k), str):
+            args[k] = resolve_agent_ref(ctx.db, ctx.agent, args[k])
+    pid = args.get("proposal_id")
+    if isinstance(pid, str) and len(pid) >= 12 and not ctx.db.one("SELECT 1 AS x FROM proposals WHERE id = ?", (pid,)):
+        rows = ctx.db.all("SELECT id FROM proposals WHERE id LIKE ? LIMIT 2", (pid.strip() + "%",))
+        if len(rows) == 1:  # a truncated id
+            args["proposal_id"] = rows[0]["id"]
 
 
 def record_decision(ctx: Ctx, *, call_id: str, action: str, args: dict, verdict: str, rule: str,
@@ -95,13 +116,28 @@ async def invoke(ctx: Ctx, name: str, args: dict | None, *, reason: str | None =
     tool = REGISTRY.get(name)
     if tool is None:
         return refuse("tool.unknown", f"no tool named {name!r}")
+    try:
+        _normalize_args(ctx, name, args)
+    except PolicyRefusal as e:
+        record_decision(ctx, call_id=call_id, action=name, args=args, verdict=BLOCK, rule=e.rule)
+        return refuse(e.rule, e.detail)
 
     # 1. policy
     action_class = tool.classify(args)
     verdict = check_action(db, settings, agent=agent, tool_name=name, grant=tool.grant,
                            action_class=action_class, override=ctx.override)
     if verdict.decision == HARD_STOP:
+        folded = owner_setup.fold(ctx.core, verdict.rule, args)
+        if folded:
+            log_event(db, kind="decision", action=name, phase="point", args=args,
+                      result={"rule": verdict.rule, "folded": folded}, outcome="refused", **base)
+            return ToolResult(False, folded, "refused", call_id=call_id)
         task_id = args.get("task_id")
+        dup = db.one("SELECT id FROM policy_decisions WHERE status = 'open' AND rule = ? AND org_id = ? AND args_json = ?",
+                     (verdict.rule, agent["org_id"], dumps(args)))
+        if dup:
+            return ToolResult(False, f"ALREADY IN THE OWNER'S QUEUE ({dup['id']}). Don't file it again; continue with "
+                                     "other work.", "refused", call_id=call_id)
         did = record_decision(ctx, call_id=call_id, action=name, args=args, verdict=HARD_STOP,
                               rule=verdict.rule, task_id=task_id, status="open")
         if task_id and db.one("SELECT 1 AS x FROM tasks WHERE id = ?", (task_id,)):
@@ -161,10 +197,14 @@ async def invoke(ctx: Ctx, name: str, args: dict | None, *, reason: str | None =
         raw = await asyncio.wait_for(tool.handler(ctx, args), timeout=tool.timeout_s)
     except PolicyRefusal as e:
         if e.rule.startswith("hard_stop"):
-            existing = db.one("SELECT id FROM policy_decisions WHERE verdict = 'hard_stop' AND status = 'open' AND rule = ?",
-                              (e.rule,))
-            did = existing["id"] if existing else record_decision(ctx, call_id=call_id, action=name, args=args,
-                                                                  verdict=HARD_STOP, rule=e.rule, status="open")
+            topic = e.rule.removeprefix("hard_stop.connect_")
+            if topic in owner_setup.TOPICS:  # one clearly worded setup item for every business
+                did = owner_setup.setup_item(db, topic)
+            else:
+                existing = db.one("SELECT id FROM policy_decisions WHERE verdict = 'hard_stop' AND status = 'open' "
+                                  "AND rule = ?", (e.rule,))
+                did = existing["id"] if existing else record_decision(ctx, call_id=call_id, action=name, args=args,
+                                                                      verdict=HARD_STOP, rule=e.rule, status="open")
             log_event(db, kind="decision", action=name, phase="after", result={"rule": e.rule, "decision_id": did},
                       outcome="hard_stop", ref_type="decision", ref_id=did, **base)
             return ToolResult(False, f"QUEUED FOR THE OWNER ({e.rule}): {e.detail} (decision {did}). Continue with other work.",
@@ -270,8 +310,15 @@ async def model_call(ctx: Ctx, *, model: str, system: str, messages: list[dict],
                                            max_tokens=max_tokens, effort=effort)
     except LLMRateLimited as e:
         from .engine import set_setting
+        from .llm.base import LLMOutOfCredit
         from .util import iso_in
         set_setting(db, "llm_paused_until", iso_in(e.retry_after_s))
+        if isinstance(e, LLMOutOfCredit):
+            from .business import file_owner_item
+            file_owner_item(db, ctx.agent["org_id"], "model_credits",
+                            "The Anthropic API account is out of credit, so every agent is paused (they retry every 15 "
+                            "minutes and resume on their own). Top up at console.anthropic.com -> Plans & Billing, and "
+                            "consider turning on auto-reload so this can't stop the businesses again.")
         log_event(db, kind="model", action="llm.call", phase="after", result={"rate_limited": str(e)[:300],
                   "retry_after_s": e.retry_after_s}, outcome="refused", **base)
         raise RunStop("rate_limited", f"model provider limit; all agents pause and resume automatically ({str(e)[:160]})")
